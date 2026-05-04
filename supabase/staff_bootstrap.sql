@@ -41,4 +41,6 @@ on conflict (id) do update
       campus_id = excluded.campus_id, teacher_id = excluded.teacher_id;
 
 -- Sanity check — should return 4 rows
-select email, role, campus_id, teacher_id from public.profiles order by role;
+select email, role::text as role, campus_id, teacher_id
+from public.profiles
+order by email;
