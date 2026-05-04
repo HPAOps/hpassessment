@@ -9,15 +9,27 @@ export function SettingsProvider({ children }) {
 
   useEffect(() => {
     let mounted = true;
-    getSettings().then(s => { if (mounted) { setSettings(s); setLoading(false); } });
+    getSettings()
+      .then(s => { if (mounted) { setSettings(s || {}); setLoading(false); } })
+      .catch(err => {
+        console.warn("[settings] load failed; using defaults:", err?.message || err);
+        if (mounted) { setSettings({}); setLoading(false); }
+      });
     return () => { mounted = false; };
   }, []);
 
   const update = useCallback(async (patch, actor) => {
-    const next = await apiUpdateSettings(patch, actor);
-    setSettings(next);
-    return next;
-  }, []);
+    try {
+      const next = await apiUpdateSettings(patch, actor);
+      setSettings(next || ((s) => ({ ...(s || {}), ...patch })));
+      return next;
+    } catch (err) {
+      console.warn("[settings] update failed:", err?.message || err);
+      // Optimistically merge so the UI still reflects the user's choice.
+      setSettings(prev => ({ ...(prev || {}), ...patch }));
+      return { ...(settings || {}), ...patch };
+    }
+  }, [settings]);
 
   return (
     <SettingsContext.Provider value={{ settings, loading, update }}>
