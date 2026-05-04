@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration_4 LIVE-Supabase smoke test PASSES end-to-end. The RLS recursion has been resolved (rls_fix.sql applied) — all direct table SELECTs via Supabase now return 200 for both anon (empty, as expected by RLS) and authenticated staff tokens. The React app boots cleanly with no react-error-overlay, Demo Mode badge is absent, all 4 staff roles log in successfully, Admin KPIs populate from real Supabase reads, Tests/Question Bank/Answer Keys/Settings/Audit admin pages render, and the complete Student flow (ID entry → courses → teacher-verify → test selector → test page → submit → /student/submitted/{id}) succeeds. Critical security check: get_student_attempt RPC response does NOT contain any correct_answer field.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/rest/v1/*", "issue": "Seed data size differs from spec expectation. Spec said 3 campuses / 22 courses; DB actually has 6 campuses / 24 courses / 30 students / 5 teachers / 5 published tests / 0 attempts (counts match what the UI shows). Confirm whether extended_seed.sql is the intended baseline."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Teacher dashboard (teacher@hpa.test)", "issues": ["Roster snapshot shows 'Active campuses 6' for a teacher scoped to a single teacher_id. For a teacher role the campus count should arguably be 1 (their campus). Not a functional bug — teacher's own KPIs (Active teachers 1, Active students 10) are scoped correctly."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Optional: tighten the Teacher Dashboard's roster snapshot so 'Active campuses' reflects only the teacher's campus (currently shows all 6).",
+    "Optional: reconcile seed counts with the PRD (expected 3 campuses / 22 courses, actual 6 / 24) — either update the PRD or trim the seed.",
+    "No blocking issues. iteration_3 RLS fix is fully effective."
+  ],
+  "critical_code_review_comments": [
+    "rls_fix.sql successfully eliminated the 42P17 recursion. Verified via curl against the live Supabase project for campuses, courses, tests, teachers, students, profiles, teacher_class_assignments, and app_settings (all HTTP 200).",
+    "SettingsContext try/catch defensive guard is working — anon /rest/v1/app_settings returns [] (by design) and the app renders without throwing an error overlay.",
+    "get_student_attempt RPC correctly omits the correct_answer column for all 5 response snapshots captured during the student flow — answer key stays server-side.",
+    "Student flow is client-driven via localStorage (hpa.studentSession, hpa.enrollments) as documented; the student_lookup / start_or_get_attempt / save_response / submit_attempt RPCs chain cleanly with no 4xx/5xx observed."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (8/8 tables + 2 RPCs return 200 with expected payloads)", "frontend": "~98% — all staff-role logins, all admin pages, full student end-to-end flow, answer-key no-leak check all pass"},
+  "test_credentials": "super@hpa.test / HPATestUser123 (verified login + dashboard); madison@hpa.test / HPATestUser123 (verified campus-admin scope to Madison HP); teacher@hpa.test / HPATestUser123 (verified teacher dashboard renders as Alicia Reyes); Student ID 100001 (verified full test submission flow).",
+  "seed_data_creation": "None. Used existing extended_seed.sql + live_mode_extras.sql + staff_bootstrap.sql data. One test attempt was created and submitted against Algebra 1A BOC for Liam Garcia (100001) — this is now persisted in test_attempts on live Supabase (visible as 'Students tested 1 / 10% completion' on the campus + teacher dashboards after the run).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Live-mode app is fully green. Campus admin sees only Madison (Active campuses 1). Teacher sees their own 10 students but the roster snapshot still counts all 6 campuses — minor polish item, not a blocker. A real submitted attempt for Liam Garcia on Algebra 1A BOC now lives in the Supabase test_attempts table from this run; if a future iteration wants a clean zero-attempts baseline, delete where student_id = (Liam's UUID) and test_id = (Algebra 1A BOC UUID) or truncate test_attempts/student_responses. The get_student_attempt RPC is confirmed safe (no correct_answer exposure).",
+  "rca of the issue": "N/A — no blocking bugs in this iteration. Prior RLS recursion (iteration_3) fully resolved by rls_fix.sql (SECURITY DEFINER helpers + caller-scope helpers my_section_ids / my_student_ids / my_campus_section_ids / my_campus_student_ids)."
+}
