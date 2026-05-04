@@ -53,7 +53,12 @@ export default function StudentTest() {
 
   async function onSubmit() {
     const res = await submitAttempt(attempt.id);
-    nav(`/student/submitted/${res.id || attempt.id}`, { replace: true });
+    // Server invalidates the session_secret on submit — pass the result via
+    // route state so the confirmation screen doesn't need to re-fetch.
+    nav(`/student/submitted/${res.id || attempt.id}`, {
+      replace: true,
+      state: { submittedAttempt: res, test },
+    });
   }
 
   if (!attempt || !test) {

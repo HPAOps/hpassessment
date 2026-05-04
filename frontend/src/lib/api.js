@@ -314,7 +314,9 @@ export async function getStudentAttempt(attemptId, studentDbId) {
     };
   }
   const { data, error } = await supabase.rpc("get_student_attempt", {
-    p_attempt_id: attemptId, p_student_db_id: studentDbId,
+    p_attempt_id: attemptId,
+    p_student_db_id: studentDbId,
+    p_session_secret: getAttemptSecret(attemptId),
   });
   if (error) throw error;
   return data;
@@ -345,7 +347,29 @@ export async function findOrCreateAttempt(studentDbId, testId, courseSectionId) 
     p_student_db_id: studentDbId, p_test_id: testId, p_section_id: courseSectionId,
   });
   if (error) throw error;
+  // Persist the session_secret keyed by attempt id for save/submit/read calls.
+  if (data && data.id && data.session_secret) {
+    try {
+      const cache = JSON.parse(localStorage.getItem("hpa.attemptSecrets") || "{}");
+      cache[data.id] = data.session_secret;
+      localStorage.setItem("hpa.attemptSecrets", JSON.stringify(cache));
+    } catch { /* ignore */ }
+  }
   return data;
+}
+
+function getAttemptSecret(attemptId) {
+  try {
+    const cache = JSON.parse(localStorage.getItem("hpa.attemptSecrets") || "{}");
+    return cache[attemptId] || null;
+  } catch { return null; }
+}
+function clearAttemptSecret(attemptId) {
+  try {
+    const cache = JSON.parse(localStorage.getItem("hpa.attemptSecrets") || "{}");
+    delete cache[attemptId];
+    localStorage.setItem("hpa.attemptSecrets", JSON.stringify(cache));
+  } catch { /* ignore */ }
 }
 
 export async function saveResponse(attemptId, questionId, answer) {
@@ -359,7 +383,10 @@ export async function saveResponse(attemptId, questionId, answer) {
     return att;
   }
   const { error } = await supabase.rpc("save_response", {
-    p_attempt_id: attemptId, p_question_id: questionId, p_answer: answer,
+    p_attempt_id: attemptId,
+    p_question_id: questionId,
+    p_answer: answer,
+    p_session_secret: getAttemptSecret(attemptId),
   });
   if (error) throw error;
   return { id: attemptId };
@@ -378,8 +405,14 @@ export async function submitAttempt(attemptId) {
     persist();
     return att;
   }
-  const { data, error } = await supabase.rpc("submit_attempt", { p_attempt_id: attemptId });
+  const secret = getAttemptSecret(attemptId);
+  const { data, error } = await supabase.rpc("submit_attempt", {
+    p_attempt_id: attemptId,
+    p_session_secret: secret,
+  });
   if (error) throw error;
+  // Server invalidated secret after submit — remove from client cache.
+  clearAttemptSecret(attemptId);
   return data;
 }
 

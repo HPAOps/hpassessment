@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import StudentShell from "@/components/Layout/StudentShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,23 +11,27 @@ export default function StudentSubmitConfirm() {
   const { attemptId } = useParams();
   const { student, logoutStudent } = useAuth();
   const nav = useNavigate();
-  const [attempt, setAttempt] = useState(null);
-  const [test, setTest] = useState(null);
+  const loc = useLocation();
+  const [attempt, setAttempt] = useState(loc.state?.submittedAttempt || null);
+  const [test, setTest] = useState(loc.state?.test || null);
   const [showScore, setShowScore] = useState(false);
 
   useEffect(() => {
     (async () => {
-      const data = await getStudentAttempt(attemptId, student.id);
-      if (data) {
-        setAttempt(data.attempt);
-        setTest(data.test);
-      }
       const settings = await getSettings();
       setShowScore(!!settings.show_score_to_student);
+      // If we didn't get the attempt via route state (e.g. the user refreshed
+      // the confirmation page), try one RPC call. This will succeed for staff
+      // viewing the page, but not for students whose session_secret was cleared
+      // on submit — which is the intended behaviour.
+      if (!attempt) {
+        try {
+          const data = await getStudentAttempt(attemptId, student.id);
+          if (data) { setAttempt(data.attempt); setTest(data.test); }
+        } catch { /* expected for students after secret invalidation */ }
+      }
     })();
-  }, [attemptId, student]);
-
-  if (!attempt || !test) return <StudentShell><div className="flex-1" /></StudentShell>;
+  }, [attemptId, student, attempt]);
 
   return (
     <StudentShell footer>
@@ -38,9 +42,11 @@ export default function StudentSubmitConfirm() {
               <CheckCircle2 className="h-9 w-9 text-[hsl(var(--success))]" />
             </div>
             <h1 className="mt-6 font-display text-3xl font-bold tracking-tight">All done!</h1>
-            <p className="mt-3 text-muted-foreground">Your answers have been submitted for <span className="font-medium text-foreground">{test.name}</span>.</p>
+            <p className="mt-3 text-muted-foreground">
+              Your answers have been submitted{test ? <> for <span className="font-medium text-foreground">{test.name}</span></> : null}.
+            </p>
 
-            {showScore ? (
+            {showScore && attempt && attempt.score_percent != null ? (
               <div className="mt-6 rounded-md border border-border p-4">
                 <div className="overline">Your score</div>
                 <div className="mt-2 font-display text-4xl font-bold tracking-tight">{attempt.score_percent}%</div>
