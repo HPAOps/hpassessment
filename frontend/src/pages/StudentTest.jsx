@@ -2,13 +2,11 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import StudentShell from "@/components/Layout/StudentShell";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, ArrowLeft, ArrowRight, CheckCircle2, ZoomIn, ZoomOut, Save, Send, AlertTriangle } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { listAttempts, listQuestionsForTest, listTests, saveResponse, submitAttempt } from "@/lib/api";
+import { getStudentAttempt, saveResponse, submitAttempt } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 
 export default function StudentTest() {
@@ -17,7 +15,8 @@ export default function StudentTest() {
   const nav = useNavigate();
   const [attempt, setAttempt] = useState(null);
   const [test, setTest] = useState(null);
-  const [questions, setQuestions] = useState(null);
+  const [orderedQuestions, setOrderedQuestions] = useState([]);
+  const [responses, setResponses] = useState([]);
   const [idx, setIdx] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [saving, setSaving] = useState(false);
@@ -25,44 +24,39 @@ export default function StudentTest() {
 
   useEffect(() => {
     (async () => {
-      const all = await listAttempts({ student_id: student.id });
-      const a = all.find(x => x.id === attemptId);
-      if (!a) { nav("/student/courses", { replace: true }); return; }
-      setAttempt(a);
-      if (a.status === "submitted") { nav(`/student/submitted/${a.id}`, { replace: true }); return; }
-      const tests = await listTests();
-      setTest(tests.find(t => t.id === a.test_id));
-      const qs = await listQuestionsForTest(a.test_id);
-      setQuestions(qs);
+      const data = await getStudentAttempt(attemptId, student.id);
+      if (!data || !data.attempt) { nav("/student/courses", { replace: true }); return; }
+      if (data.attempt.status === "submitted") { nav(`/student/submitted/${data.attempt.id}`, { replace: true }); return; }
+      setAttempt(data.attempt);
+      setTest(data.test);
+      setOrderedQuestions(data.questions || []);
+      setResponses(data.responses || []);
     })();
   }, [attemptId, student, nav]);
 
-  const orderedQuestions = useMemo(() => {
-    if (!attempt || !questions) return [];
-    return attempt.question_order.map(qid => questions.find(q => q.id === qid)).filter(Boolean);
-  }, [attempt, questions]);
-
   const currentQ = orderedQuestions[idx];
-  const currentResponse = attempt?.responses?.find(r => r.question_id === currentQ?.id);
-  const answeredCount = attempt?.responses?.filter(r => r.selected_answer).length || 0;
+  const currentResponse = responses.find(r => r.question_id === currentQ?.id);
+  const answeredCount = responses.filter(r => r.selected_answer).length;
   const remaining = (orderedQuestions.length || 0) - answeredCount;
 
   async function pick(letter) {
     if (!currentQ) return;
     setSaving(true);
-    const updated = await saveResponse(attempt.id, currentQ.id, letter);
-    setAttempt({ ...updated });
+    await saveResponse(attempt.id, currentQ.id, letter);
+    setResponses(prev => {
+      const others = prev.filter(r => r.question_id !== currentQ.id);
+      return [...others, { question_id: currentQ.id, selected_answer: letter }];
+    });
     lastSavedRef.current = Date.now();
     setSaving(false);
   }
 
   async function onSubmit() {
     const res = await submitAttempt(attempt.id);
-    setAttempt(res);
-    nav(`/student/submitted/${res.id}`, { replace: true });
+    nav(`/student/submitted/${res.id || attempt.id}`, { replace: true });
   }
 
-  if (!attempt || !test || !questions) {
+  if (!attempt || !test) {
     return <StudentShell><div className="flex-1 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div></StudentShell>;
   }
 
@@ -97,17 +91,19 @@ export default function StudentTest() {
               </Button>
             </div>
           </div>
-          <div className="rounded-xl border border-border bg-card overflow-hidden">
-            <div className="overflow-auto max-h-[60vh] flex items-center justify-center bg-secondary/30 p-4">
-              <img
-                src={currentQ.image_url}
-                alt={`Question ${idx + 1}`}
-                style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
-                className="max-w-full transition-transform"
-                data-testid="question-image"
-              />
+          {currentQ && (
+            <div className="rounded-xl border border-border bg-card overflow-hidden">
+              <div className="overflow-auto max-h-[60vh] flex items-center justify-center bg-secondary/30 p-4">
+                <img
+                  src={currentQ.image_url}
+                  alt={`Question ${idx + 1}`}
+                  style={{ transform: `scale(${zoom})`, transformOrigin: "top center" }}
+                  className="max-w-full transition-transform"
+                  data-testid="question-image"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Answers */}
           <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -156,7 +152,7 @@ export default function StudentTest() {
           <div className="overline mb-3">Question Navigator</div>
           <div className="grid grid-cols-5 gap-2" data-testid="question-navigator">
             {orderedQuestions.map((q, i) => {
-              const r = attempt.responses.find(x => x.question_id === q.id);
+              const r = responses.find(x => x.question_id === q.id);
               const answered = !!r?.selected_answer;
               const isCurrent = i === idx;
               return (

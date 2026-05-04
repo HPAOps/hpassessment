@@ -5,7 +5,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { listAttempts, listTests, getSettings } from "@/lib/api";
+import { getStudentAttempt, getSettings } from "@/lib/api";
 
 export default function StudentSubmitConfirm() {
   const { attemptId } = useParams();
@@ -17,11 +17,11 @@ export default function StudentSubmitConfirm() {
 
   useEffect(() => {
     (async () => {
-      const all = await listAttempts({ student_id: student.id });
-      const a = all.find(x => x.id === attemptId);
-      setAttempt(a);
-      const tests = await listTests();
-      setTest(tests.find(t => t.id === a?.test_id));
+      const data = await getStudentAttempt(attemptId, student.id);
+      if (data) {
+        setAttempt(data.attempt);
+        setTest(data.test);
+      }
       const settings = await getSettings();
       setShowScore(!!settings.show_score_to_student);
     })();

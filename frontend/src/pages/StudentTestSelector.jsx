@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Loader2, FileText, Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { getStudentEnrollments, getOpenTestsForCourse, listAttempts, findOrCreateAttempt } from "@/lib/api";
+import { getStudentEnrollments, getOpenTestsForCourse, listStudentAttempts, findOrCreateAttempt } from "@/lib/api";
 import { EmptyState } from "@/components/common/EmptyState";
 
 export default function StudentTestSelector() {
@@ -26,7 +26,7 @@ export default function StudentTestSelector() {
       if (it) {
         const open = await getOpenTestsForCourse(it.course.id);
         setTests(open);
-        const ats = await listAttempts({ student_id: student.id });
+        const ats = await listStudentAttempts(student.id);
         setAttempts(ats);
       }
     })();

@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration_3 LIVE-Supabase smoke test FAILED at the very first network call. EVERY direct table SELECT from the Supabase anon (or authenticated) role returns HTTP 500 with Postgres error code 42P17 'infinite recursion detected in policy for relation \"teacher_class_assignments\"' (and cascading 'stack depth limit exceeded' errors on all other tables whose RLS policies reference it). Because App.js calls getSettings() on boot, the app blows up before the UI can render: an 'Uncaught runtime errors' dev overlay covers the entire page, preventing both staff login and student ID entry. Only SECURITY DEFINER RPCs (student_lookup, student_open_tests) return 200 correctly.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POSTGRES RLS (teacher_class_assignments)", "issue": "SQL policy is self-recursive. Error: {\"code\":\"42P17\",\"message\":\"infinite recursion detected in policy for relation \\\"teacher_class_assignments\\\"\"}. Fix: rewrite RLS policies for teacher_class_assignments (and any sibling that references it) to use SECURITY DEFINER helper functions (e.g. public.is_super_admin(), public.is_campus_admin(uuid), public.my_teacher_id()) instead of in-policy subqueries that hit the same table.", "priority": "CRITICAL"},
+      {"endpoint": "/rest/v1/app_settings?id=eq.1", "issue": "Returns HTTP 500 {\"code\":\"54001\",\"message\":\"stack depth limit exceeded\"} for both anon and authenticated. Called on every page via App.js bootstrap -> triggers react-error-overlay which blocks the entire UI.", "priority": "CRITICAL"},
+      {"endpoint": "/rest/v1/campuses, /courses, /tests, /teachers, /students, /profiles", "issue": "All return HTTP 500 with the same stack-depth / recursion error. Verified with super@hpa.test bearer token.", "priority": "CRITICAL"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "App bootstrap (SettingsProvider / Layout)", "issue": "Initial getSettings() failure is NOT caught, so react-error-overlay renders on top of the app in dev mode, blocking all interaction (student ID input and Staff sign-in button are both un-clickable while the overlay is visible). Wrap getSettings() in try/catch and fall back to a default settings object so the UI degrades gracefully when Supabase is misconfigured.", "selector": "/app/frontend/src/lib/api.js:getSettings + wherever it is called on mount", "priority": "HIGH"},
+      {"component": "StaffLogin post-auth profile fetch", "issue": "After supabase.auth.signInWithPassword() the app reads public.profiles; that read is currently 500 (same RLS bug). Once the RLS bug is fixed, re-test that the login flow surfaces a clear error if the profile row is missing instead of hanging.", "selector": "/staff/login -> Sign in button", "priority": "HIGH"}
+    ],
+    "integration_issues": [
+      {"flow": "Staff login (super/district/madison/teacher)", "issue": "Cannot complete. Auth token is issued by /auth/v1/token (200), but the subsequent profile read 500s. Final URL stays at /staff/login.", "affected_selectors": ["[data-testid=staff-email-input]", "[data-testid=staff-password-input]", "button[type=submit]"]},
+      {"flow": "Admin Dashboard KPIs", "issue": "All listCampuses / listCourses / listTests / listTeachers / listStudents / listAttempts calls 500 because of RLS recursion. Cards will be empty or throw.", "affected_selectors": ["/admin/dashboard"]},
+      {"flow": "Student landing -> Enter Student ID", "issue": "Blocked by the global error overlay. student_lookup RPC itself works (verified via curl, returns Liam Garcia + Algebra 1A/1B enrollments), but the user can't reach it through the UI while the overlay covers the viewport.", "affected_selectors": ["[data-testid=student-id-input]", "[data-testid=student-continue-btn]"]},
+      {"flow": "Student submit confirm (/student/submitted/{id})", "issue": "Calls getSettings() -> 500 -> page will error. Fix RLS on app_settings.", "affected_selectors": ["/student/submitted/:id"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "PRIMARY FIX (SQL, not frontend): rewrite the RLS policies in /app/supabase/full_setup.sql (and any file that re-creates them) to eliminate recursion on teacher_class_assignments. Typical pattern: CREATE OR REPLACE FUNCTION public.current_staff_role() RETURNS text LANGUAGE sql SECURITY DEFINER STABLE AS $$ SELECT role FROM public.profiles WHERE id = auth.uid() $$; then reference current_staff_role() / auth.uid() inside the policies instead of a subquery like `EXISTS (SELECT 1 FROM teacher_class_assignments ...)` inside a teacher_class_assignments policy.",
+    "SECONDARY FIX (frontend defensive): in the bootstrap location that calls getSettings() (SettingsProvider or Layout), wrap the call in try/catch and default to {} so a misconfigured DB does not paint an 'Uncaught runtime errors' overlay that blocks the whole app.",
+    "After the SQL fix, re-run the full iteration_3 checklist: Demo badge absence, staff login for all 4 roles, Admin Dashboard KPI population, Tests page publish toggle, Question Bank images, Answer Key editor write-back, Settings toggle persistence, Audit log display, and the full Student flow.",
+    "Verify no answer-key leakage: curl /rest/v1/rpc/get_student_attempt and grep the response for 'correct_answer' — should be absent."
+  ],
+  "critical_code_review_comments": [
+    "The Supabase SQL setup (full_setup.sql or rls_policies.sql) has at least one self-referential RLS policy on teacher_class_assignments. This is the single root cause of every 500 seen in this run — when a policy on table X does `EXISTS (SELECT 1 FROM X WHERE ...)`, Postgres re-checks the policy on the inner SELECT and recurses until the stack limit is hit. The standard fix is SECURITY DEFINER helper functions.",
+    "Frontend api.js should not assume Supabase calls will succeed during bootstrap. getSettings() (called by SettingsProvider / Layout) currently rethrows, which in CRA dev mode surfaces as the react-error-overlay red screen and blocks every interaction on the page. Catch and default.",
+    "staff_bootstrap.sql is presumed to have inserted the 4 profile rows — cannot verify while profiles table is 500. Once RLS is fixed, confirm `select id, email, role from public.profiles` returns the four rows.",
+    "SECURITY DEFINER RPCs are working correctly (student_lookup, student_open_tests tested via curl), so the student flow architecture is sound — only RLS on the directly-read tables is broken."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only request) — but Supabase returns 500 on 7/8 tables tested", "frontend": "0% — app cannot render past the bootstrap getSettings() call due to the red error overlay"},
+  "test_credentials": "Verified via /app/memory/test_credentials.md. super@hpa.test / HPATestUser123 returns a valid access_token from /auth/v1/token, confirming the user exists and email confirmation is OFF. The problem is purely the RLS policies on the operational tables.",
+  "seed_data_creation": "None.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "After SQL RLS is fixed, the very first sanity check should be: `curl -H 'apikey: $ANON' -H 'Authorization: Bearer $ANON' 'https://soaagmzmecutvlxfbscl.supabase.co/rest/v1/app_settings?select=*&id=eq.1'` — it must return 200 with a JSON row, not 500. After that works, test each table in turn (campuses, courses, tests, teachers, students, profiles, teacher_class_assignments) with both an anon key and a super-admin bearer token. Only then run the Playwright end-to-end flow. The frontend code itself (api.js, supabase.js, pages) appears correct and is already fully wired to Supabase RPCs/tables.",
+  "rca of the issue": "RCA: Postgres error 42P17 'infinite recursion detected in policy for relation teacher_class_assignments'. Reproduction: `curl -H \"apikey: <anon>\" -H \"Authorization: Bearer <super_jwt>\" https://soaagmzmecutvlxfbscl.supabase.co/rest/v1/teacher_class_assignments?select=*&limit=1` returns 500 with code 42P17. Any table whose RLS policy joins into teacher_class_assignments cascades to 'stack depth limit exceeded' (54001). Mitigation: (1) drop the recursive policy, (2) create SECURITY DEFINER helper functions that read the caller's role/profile without triggering RLS, (3) recreate the policies using those helpers, (4) reload PostgREST (NOTIFY pgrst, 'reload config'). Until this is done the live-mode app cannot function — the demo flow (REACT_APP_FORCE_DEMO=true) still works, so a temporary rollback is available if needed."
+}
