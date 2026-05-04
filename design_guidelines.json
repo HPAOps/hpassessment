@@ -1,0 +1,92 @@
+{
+  "project_name": "HPA Course Growth Assessments",
+  "theme": "Light Theme Priority (with Dark Mode Support)",
+  "archetype": "Archetype 4: Swiss & High-Contrast (Adapted for Education/STEM)",
+  "color_palette": {
+    "brand_primary": "#0F2040",
+    "brand_secondary": "#F2A900",
+    "background_light": "#FAFAFA",
+    "background_dark": "#0A1128",
+    "surface_light": "#FFFFFF",
+    "surface_dark": "#111C3B",
+    "text_primary_light": "#0F2040",
+    "text_secondary_light": "#475569",
+    "text_primary_dark": "#F8FAFC",
+    "text_secondary_dark": "#94A3B8",
+    "border_light": "#E2E8F0",
+    "border_dark": "#1E293B",
+    "error": "#EF4444",
+    "success": "#10B981",
+    "warning": "#F59E0B",
+    "rules": [
+      "No pure black or pure white; tint neutrals slightly with navy.",
+      "Primary CTA buttons use Navy (#0F2040) on light mode, Gold (#F2A900) on dark mode.",
+      "High contrast focus states required."
+    ]
+  },
+  "typography": {
+    "heading_font": "Cabinet Grotesk",
+    "body_font": "Outfit",
+    "scale": {
+      "h1": "text-4xl sm:text-5xl tracking-tight leading-none font-bold",
+      "h2": "text-2xl sm:text-3xl tracking-tight leading-none font-semibold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm tracking-wide"
+    },
+    "rules": [
+      "Never use Inter, Roboto, or Open Sans.",
+      "Headlines must use tracking-tight.",
+      "Overlines/Labels must be uppercase, tiny, wide spacing (tracking-[0.2em])."
+    ]
+  },
+  "layout_spacing": {
+    "system": "Tailwind standard scale, prioritize generous padding (p-6, p-8, p-12) for calm UI.",
+    "student_view": "Chromebook-optimized (1366x768). Focused single column or two-column (image on left, options on right). Question images max-h-[60vh] to avoid scrolling.",
+    "dashboard_grid": "Control Room Grid (gap-4/gap-6, strict data density). Modular drag-and-drop sections.",
+    "wizards": "Step-by-step progressive disclosure, centered max-w-3xl containers."
+  },
+  "surfaces_and_components": {
+    "cards": "Flat solid background, 1px border-border, no shadow by default. Hover lift (-translate-y-1) + shadow-lg for interactive cards.",
+    "buttons": "Subtle roundness (rounded-md). High contrast text. Student test buttons must be extra large (p-6) with explicit A/B/C/D markers.",
+    "headers": "Crystal Glassmorphism (bg-white/70 or bg-black/60, backdrop-blur-xl, border-b border-border/40) if sticky.",
+    "forms": "Use Shadcn UI customized with brand border radius and colors.",
+    "charts": "Recharts. Use brand colors (Navy, Gold) and complementary cool tones (Teal/Blue) for data series. Avoid red/green unless indicating negative/positive.",
+    "tables": "Dense rows for admin data, subtle hover state (bg-slate-50)."
+  },
+  "motion": {
+    "rules": [
+      "Respect prefers-reduced-motion.",
+      "Hover states: transition-transform 0.2s ease, opacity 0.2s ease.",
+      "Page transitions: subtle fade-in."
+    ]
+  },
+  "accessibility": {
+    "contrast": "Minimum 4.5:1 for normal text (WCAG AA).",
+    "testing": "All interactive elements MUST include data-testid attribute (e.g., data-testid='student-submit-test')."
+  },
+  "media": {
+    "logos": {
+      "primary_shield": {
+        "url": "https://highlandprepaz.net/wp-content/uploads/2021/05/MHP-Shield-2m.png",
+        "usage": "Main navigation, Login header"
+      },
+      "rating_badge": {
+        "url": "https://highlandprepaz.net/wp-content/uploads/2018/05/a1-600px-300x222.png",
+        "usage": "Footer, Login screen trust indicator"
+      },
+      "secondary_location": {
+        "url": "https://highlandprepaz.net/wp-content/uploads/2021/05/surprise.png",
+        "usage": "Campus-specific dashboards or localized reports"
+      }
+    }
+  },
+  "instructions_to_main_agent": [
+    "Set up Tailwind CSS with 'Cabinet Grotesk' and 'Outfit' fonts.",
+    "Implement student assessment flow for 1366x768 screens: ultra-simple login, clear course/teacher selection, and distraction-free test interface with large tap targets.",
+    "Build district/campus admin dashboards using Recharts with the HPA brand color palette.",
+    "Create the OneRoster ZIP import and Test Answer Key wizards using multistep forms and Shadcn UI components.",
+    "Implement role-based layouts (Student Test Layout vs Admin Dashboard Layout).",
+    "Ensure ALL buttons, inputs, and clickable elements have kebab-case data-testid attributes."
+  ]
+}
