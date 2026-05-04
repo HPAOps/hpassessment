@@ -10,7 +10,7 @@
 -- =============================================================================
 
 -- Helper: is the current user a staff role?
-create or replace function public.current_role()
+create or replace function public.app_role()
 returns user_role
 language sql stable
 as $$
@@ -107,15 +107,15 @@ create policy "courses: district write" on public.courses for all using (public.
 -- COURSE SECTIONS
 -- =============================================================================
 create policy "sections: district read" on public.course_sections for select using (public.is_district_admin());
-create policy "sections: campus read"   on public.course_sections for select using (public.current_role() = 'campus_admin' and campus_id = public.current_campus_id());
-create policy "sections: teacher read"  on public.course_sections for select using (public.current_role() = 'teacher' and id in (select course_section_id from public.teacher_class_assignments where teacher_id = public.current_teacher_id()));
+create policy "sections: campus read"   on public.course_sections for select using (public.app_role() = 'campus_admin' and campus_id = public.current_campus_id());
+create policy "sections: teacher read"  on public.course_sections for select using (public.app_role() = 'teacher' and id in (select course_section_id from public.teacher_class_assignments where teacher_id = public.current_teacher_id()));
 create policy "sections: district write" on public.course_sections for all using (public.is_district_admin()) with check (public.is_district_admin());
 
 -- =============================================================================
 -- TEACHERS
 -- =============================================================================
 create policy "teachers: district read" on public.teachers for select using (public.is_district_admin());
-create policy "teachers: campus read"   on public.teachers for select using (public.current_role() = 'campus_admin' and campus_id = public.current_campus_id());
+create policy "teachers: campus read"   on public.teachers for select using (public.app_role() = 'campus_admin' and campus_id = public.current_campus_id());
 create policy "teachers: self read"     on public.teachers for select using (id = public.current_teacher_id());
 create policy "teachers: district write" on public.teachers for all using (public.is_district_admin()) with check (public.is_district_admin());
 
@@ -123,9 +123,9 @@ create policy "teachers: district write" on public.teachers for all using (publi
 -- STUDENTS
 -- =============================================================================
 create policy "students: district read" on public.students for select using (public.is_district_admin());
-create policy "students: campus read"   on public.students for select using (public.current_role() = 'campus_admin' and campus_id = public.current_campus_id());
+create policy "students: campus read"   on public.students for select using (public.app_role() = 'campus_admin' and campus_id = public.current_campus_id());
 create policy "students: teacher read"  on public.students for select using (
-  public.current_role() = 'teacher'
+  public.app_role() = 'teacher'
   and id in (
     select se.student_id
     from public.student_enrollments se
@@ -140,18 +140,18 @@ create policy "students: district write" on public.students for all using (publi
 -- =============================================================================
 create policy "enrollments: district read" on public.student_enrollments for select using (public.is_district_admin());
 create policy "enrollments: campus read"   on public.student_enrollments for select using (
-  public.current_role() = 'campus_admin'
+  public.app_role() = 'campus_admin'
   and student_id in (select id from public.students where campus_id = public.current_campus_id())
 );
 create policy "enrollments: teacher read"  on public.student_enrollments for select using (
-  public.current_role() = 'teacher'
+  public.app_role() = 'teacher'
   and course_section_id in (select course_section_id from public.teacher_class_assignments where teacher_id = public.current_teacher_id())
 );
 create policy "enrollments: district write" on public.student_enrollments for all using (public.is_district_admin()) with check (public.is_district_admin());
 
 create policy "tca: district read" on public.teacher_class_assignments for select using (public.is_district_admin());
 create policy "tca: campus read"   on public.teacher_class_assignments for select using (
-  public.current_role() = 'campus_admin'
+  public.app_role() = 'campus_admin'
   and course_section_id in (select id from public.course_sections where campus_id = public.current_campus_id())
 );
 create policy "tca: self read"     on public.teacher_class_assignments for select using (teacher_id = public.current_teacher_id());
@@ -197,22 +197,22 @@ create policy "tif: district" on public.test_import_files for all using (public.
 -- teachers scoped to their assigned section students.
 create policy "attempts: district read" on public.test_attempts for select using (public.is_district_admin());
 create policy "attempts: campus read"   on public.test_attempts for select using (
-  public.current_role() = 'campus_admin'
+  public.app_role() = 'campus_admin'
   and student_id in (select id from public.students where campus_id = public.current_campus_id())
 );
 create policy "attempts: teacher read"  on public.test_attempts for select using (
-  public.current_role() = 'teacher'
+  public.app_role() = 'teacher'
   and course_section_id in (select course_section_id from public.teacher_class_assignments where teacher_id = public.current_teacher_id())
 );
 create policy "attempts: district write" on public.test_attempts for all using (public.is_district_admin()) with check (public.is_district_admin());
 
 create policy "responses: district read" on public.student_responses for select using (public.is_district_admin());
 create policy "responses: campus read"   on public.student_responses for select using (
-  public.current_role() = 'campus_admin'
+  public.app_role() = 'campus_admin'
   and attempt_id in (select id from public.test_attempts where student_id in (select id from public.students where campus_id = public.current_campus_id()))
 );
 create policy "responses: teacher read"  on public.student_responses for select using (
-  public.current_role() = 'teacher'
+  public.app_role() = 'teacher'
   and attempt_id in (select id from public.test_attempts where course_section_id in (select course_section_id from public.teacher_class_assignments where teacher_id = public.current_teacher_id()))
 );
 create policy "responses: district write" on public.student_responses for all using (public.is_district_admin()) with check (public.is_district_admin());
@@ -222,11 +222,11 @@ create policy "taq: district write" on public.test_attempt_questions for all usi
 
 create policy "growth: district read" on public.growth_results for select using (public.is_district_admin());
 create policy "growth: campus read"   on public.growth_results for select using (
-  public.current_role() = 'campus_admin'
+  public.app_role() = 'campus_admin'
   and student_id in (select id from public.students where campus_id = public.current_campus_id())
 );
 create policy "growth: teacher read"  on public.growth_results for select using (
-  public.current_role() = 'teacher'
+  public.app_role() = 'teacher'
   and student_id in (
     select se.student_id from public.student_enrollments se
     join public.teacher_class_assignments tca on tca.course_section_id = se.course_section_id

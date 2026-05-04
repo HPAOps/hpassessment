@@ -153,7 +153,7 @@ security definer
 set search_path = public
 as $$
 begin
-  if not (public.is_district_admin() or public.current_role() = 'campus_admin') then
+  if not (public.is_district_admin() or public.app_role() = 'campus_admin') then
     raise exception 'Not authorized to reset attempts';
   end if;
 
