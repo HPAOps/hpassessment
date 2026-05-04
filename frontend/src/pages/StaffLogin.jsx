@@ -14,7 +14,8 @@ export default function StaffLogin() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const { loginStaff } = useAuth();
+  const [msLoading, setMsLoading] = useState(false);
+  const { loginStaff, loginStaffMicrosoft } = useAuth();
   const nav = useNavigate();
   const loc = useLocation();
 
@@ -29,6 +30,17 @@ export default function StaffLogin() {
       toast.error(err.message || "Sign in failed.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function onMicrosoft() {
+    setMsLoading(true);
+    try {
+      await loginStaffMicrosoft();
+      // Browser redirects to Microsoft, then back to /staff/oauth-callback
+    } catch (err) {
+      toast.error(err.message || "Microsoft sign-in failed.");
+      setMsLoading(false);
     }
   }
 
@@ -57,6 +69,30 @@ export default function StaffLogin() {
             <p className="mt-3 text-sm text-muted-foreground">For admins, district staff, and teachers.</p>
 
             <form onSubmit={onSubmit} className="mt-8 space-y-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onMicrosoft}
+                disabled={msLoading || isDemoMode}
+                className="w-full h-11 gap-2"
+                data-testid="staff-ms-login"
+              >
+                {msLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : (
+                  <svg viewBox="0 0 23 23" className="h-4 w-4" aria-hidden>
+                    <path fill="#f35325" d="M1 1h10v10H1z"/>
+                    <path fill="#81bc06" d="M12 1h10v10H12z"/>
+                    <path fill="#05a6f0" d="M1 12h10v10H1z"/>
+                    <path fill="#ffba08" d="M12 12h10v10H12z"/>
+                  </svg>
+                )}
+                Sign in with Microsoft
+              </Button>
+
+              <div className="relative my-2">
+                <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-border" /></div>
+                <div className="relative flex justify-center text-xs"><span className="bg-card px-2 text-muted-foreground">or use email (break-glass)</span></div>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
                 <Input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="h-11" data-testid="staff-email-input" />

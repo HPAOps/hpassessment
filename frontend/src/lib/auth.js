@@ -8,6 +8,45 @@ import { lookupStudentById, addAudit } from "./api";
 const STAFF_KEY = "hpa.staffSession";
 const STUDENT_KEY = "hpa.studentSession";
 
+export async function staffSignInWithMicrosoft() {
+  if (isDemoMode) {
+    throw new Error("Microsoft sign-in is available only in live mode. Set REACT_APP_FORCE_DEMO=false.");
+  }
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "azure",
+    options: {
+      scopes: "openid email profile offline_access",
+      redirectTo: `${window.location.origin}/staff/oauth-callback`,
+    },
+  });
+  if (error) throw error;
+  return data;
+}
+
+// Called by the OAuth callback page after Supabase finishes the redirect.
+export async function hydrateStaffSessionFromSupabase() {
+  if (isDemoMode || !supabase) return null;
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data: profile, error } = await supabase
+    .from("profiles").select("*").eq("id", user.id).maybeSingle();
+  if (error) throw error;
+  if (!profile) {
+    throw new Error("Your email is not yet authorized for HPA Growth Assessments. Please contact your district admin.");
+  }
+  const session = {
+    kind: "staff",
+    email: user.email,
+    role: profile.role,
+    name: profile.name || user.email,
+    campus_id: profile.campus_id || null,
+    teacher_id: profile.teacher_id || null,
+    provider: user.app_metadata?.provider || "email",
+  };
+  localStorage.setItem(STAFF_KEY, JSON.stringify(session));
+  return session;
+}
+
 export async function staffSignIn(email, password) {
   if (isDemoMode) {
     const u = staff_users.find(x => x.email.toLowerCase() === email.toLowerCase() && x.password === password);

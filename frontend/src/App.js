@@ -13,6 +13,7 @@ import StudentTestSelector from "@/pages/StudentTestSelector";
 import StudentTest from "@/pages/StudentTest";
 import StudentSubmitConfirm from "@/pages/StudentSubmitConfirm";
 import StaffLogin from "@/pages/StaffLogin";
+import StaffOAuthCallback from "@/pages/StaffOAuthCallback";
 
 import AdminDashboard from "@/pages/admin/Dashboard";
 import Tests from "@/pages/admin/Tests";
@@ -44,6 +45,7 @@ function App() {
 
             {/* Staff */}
             <Route path="/staff/login" element={<StaffLogin />} />
+            <Route path="/staff/oauth-callback" element={<StaffOAuthCallback />} />
             <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
             <Route path="/admin/dashboard" element={<RequireStaff><AdminDashboard /></RequireStaff>} />
             <Route path="/admin/tests" element={<RequireStaff roles={["super_admin","district_admin","campus_admin"]}><Tests /></RequireStaff>} />

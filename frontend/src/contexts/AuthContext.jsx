@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
-import { getStaffSession, getStudentSession, staffSignIn, studentSignIn, signOutStaff, signOutStudent, signOutAll } from "@/lib/auth";
+import { getStaffSession, getStudentSession, staffSignIn, studentSignIn, signOutStaff, signOutStudent, signOutAll, staffSignInWithMicrosoft } from "@/lib/auth";
 
 const AuthContext = createContext(null);
 
@@ -21,6 +21,12 @@ export function AuthProvider({ children }) {
     setStaff(s);
     return s;
   }, []);
+  const loginStaffMicrosoft = useCallback(async () => {
+    return await staffSignInWithMicrosoft();
+  }, []);
+  const refreshStaff = useCallback((session) => {
+    setStaff(session || getStaffSession());
+  }, []);
   const loginStudent = useCallback(async (studentId) => {
     const s = await studentSignIn(studentId);
     setStudent(s);
@@ -30,7 +36,7 @@ export function AuthProvider({ children }) {
   const logoutStudent = useCallback(() => { signOutStudent(); setStudent(null); }, []);
   const logoutAll = useCallback(() => { signOutAll(); setStaff(null); setStudent(null); }, []);
 
-  const value = { staff, student, loginStaff, loginStudent, logoutStaff, logoutStudent, logoutAll };
+  const value = { staff, student, loginStaff, loginStaffMicrosoft, refreshStaff, loginStudent, logoutStaff, logoutStudent, logoutAll };
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
