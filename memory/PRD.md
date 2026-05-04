@@ -34,10 +34,11 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
 
 - Student flow: ID login → course picker → teacher verify → test selector →
   image-based test (zoom, prev/next, navigator, autosave) → submit confirm.
+  **End-to-end verified by testing agent (iteration_2).**
 - Auto-scoring with growth % (((EOC-BOC)/(100-BOC))*100).
 - Random question order per attempt, preserved on the attempt record.
 - Admin dashboards (District / Campus / Teacher) with Recharts (campus comparison,
-  course BOC vs EOC, growth distribution).
+  course BOC vs EOC, growth distribution). **Campus admin scoping verified.**
 - OneRoster ZIP import wizard (jszip + papaparse) with parse → preview → commit.
 - Test import wizard (booklet + answer key + question images / ZIP).
 - Question Bank manager (per-test grid, replace, bulk filename matching).
