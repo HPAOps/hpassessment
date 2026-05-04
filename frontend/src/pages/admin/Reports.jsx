@@ -163,8 +163,8 @@ export default function Reports() {
             </Select>
           </CardContent></Card>
           <Card><CardContent className="p-6">
-            <div className="h-72">
-              <ResponsiveContainer>
+            <div className="h-72 w-full min-h-[18rem]">
+              <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={qAnalysis.map(x => ({ name: `Q${x.q.question_number}`, percent: x.percent, mostWrong: x.mostWrong }))}>
                   <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
                   <XAxis dataKey="name" tickLine={false} axisLine={false} fontSize={12} />

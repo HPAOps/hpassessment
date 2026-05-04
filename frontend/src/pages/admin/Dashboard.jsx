@@ -26,9 +26,11 @@ export default function AdminDashboard() {
     const role = staff?.role;
     let students = data.students;
     let teachers = data.teachers;
+    let campuses = data.campuses;
     if (role === "campus_admin") {
       students = students.filter(s => s.campus_id === staff.campus_id);
       teachers = teachers.filter(t => t.campus_id === staff.campus_id);
+      campuses = campuses.filter(c => c.id === staff.campus_id);
     } else if (role === "teacher") {
       // For teacher we keep only their students via class assignments — simplified
       teachers = teachers.filter(t => t.id === staff.teacher_id);
@@ -37,7 +39,7 @@ export default function AdminDashboard() {
     const attempts = data.attempts.filter(a => studentIds.has(a.student_id));
     const submitted = attempts.filter(a => a.status === "submitted");
     const growth = data.growth.filter(g => studentIds.has(g.student_id));
-    return { ...data, students, teachers, attempts: submitted, growth };
+    return { ...data, campuses, students, teachers, attempts: submitted, growth };
   }, [data, staff]);
 
   if (!filtered) return <AppShell><div className="text-muted-foreground text-sm">Loading…</div></AppShell>;
@@ -97,8 +99,8 @@ export default function AdminDashboard() {
           <CardHeader>
             <CardTitle className="font-display tracking-tight">Campus comparison</CardTitle>
           </CardHeader>
-          <CardContent className="h-72">
-            <ResponsiveContainer>
+          <CardContent className="h-72 w-full min-h-[18rem]">
+            <ResponsiveContainer width="100%" height="100%">
               <BarChart data={campusData}>
                 <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="name" tickLine={false} axisLine={false} fontSize={12} />
@@ -117,8 +119,8 @@ export default function AdminDashboard() {
           <CardHeader>
             <CardTitle className="font-display tracking-tight">Course performance (BOC vs EOC)</CardTitle>
           </CardHeader>
-          <CardContent className="h-72">
-            <ResponsiveContainer>
+          <CardContent className="h-72 w-full min-h-[18rem]">
+            <ResponsiveContainer width="100%" height="100%">
               <LineChart data={courseData}>
                 <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="name" tickLine={false} axisLine={false} fontSize={11} />
@@ -138,8 +140,8 @@ export default function AdminDashboard() {
           <CardHeader>
             <CardTitle className="font-display tracking-tight">Growth distribution</CardTitle>
           </CardHeader>
-          <CardContent className="h-64">
-            <ResponsiveContainer>
+          <CardContent className="h-64 w-full min-h-[16rem]">
+            <ResponsiveContainer width="100%" height="100%">
               <BarChart data={dist}>
                 <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="range" tickLine={false} axisLine={false} fontSize={12} />

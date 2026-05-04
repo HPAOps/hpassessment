@@ -127,12 +127,20 @@ export const student_enrollments = students.flatMap((s, idx) => {
 });
 
 // --- Tests -----------------------------------------------------------------
+// Compute test windows relative to "today" so the demo always has at least
+// one live BOC and one approaching EOC, regardless of when the app is run.
+const _today = new Date();
+const _iso = (d) => d.toISOString().slice(0, 10);
+const _addDays = (n) => { const d = new Date(_today); d.setDate(d.getDate() + n); return _iso(d); };
+
 export const tests = [
-  { id: "test-alg1a-boc", name: "Algebra 1A Beginning of Course", course_id: "course-1", test_type: "BOC", school_year_id: "sy-2627", scope: "district", question_count: 10, is_published: true, opens_at: "2026-08-03", closes_at: "2026-08-31" },
-  { id: "test-alg1a-eoc", name: "Algebra 1A End of Course",       course_id: "course-1", test_type: "EOC", school_year_id: "sy-2627", scope: "district", question_count: 10, is_published: true, opens_at: "2026-12-01", closes_at: "2026-12-19" },
-  { id: "test-alg1b-boc", name: "Algebra 1B Beginning of Course", course_id: "course-2", test_type: "BOC", school_year_id: "sy-2627", scope: "district", question_count: 8,  is_published: true, opens_at: "2027-01-05", closes_at: "2027-01-31" },
-  { id: "test-alg1b-eoc", name: "Algebra 1B End of Course",       course_id: "course-2", test_type: "EOC", school_year_id: "sy-2627", scope: "district", question_count: 8,  is_published: true, opens_at: "2027-04-15", closes_at: "2027-05-22" },
-  { id: "test-biola-boc", name: "Biology A Beginning of Course",  course_id: "course-9", test_type: "BOC", school_year_id: "sy-2627", scope: "district", question_count: 6,  is_published: true, opens_at: "2026-08-03", closes_at: "2026-08-31" },
+  // BOC windows are LIVE today (so student flow works in any month).
+  { id: "test-alg1a-boc", name: "Algebra 1A Beginning of Course", course_id: "course-1", test_type: "BOC", school_year_id: "sy-2627", scope: "district", question_count: 10, is_published: true, opens_at: _addDays(-30), closes_at: _addDays(60) },
+  // EOC windows are also live so the demo can show full BOC→EOC growth flow.
+  { id: "test-alg1a-eoc", name: "Algebra 1A End of Course",       course_id: "course-1", test_type: "EOC", school_year_id: "sy-2627", scope: "district", question_count: 10, is_published: true, opens_at: _addDays(-15), closes_at: _addDays(120) },
+  { id: "test-alg1b-boc", name: "Algebra 1B Beginning of Course", course_id: "course-2", test_type: "BOC", school_year_id: "sy-2627", scope: "district", question_count: 8,  is_published: true, opens_at: _addDays(-30), closes_at: _addDays(60) },
+  { id: "test-alg1b-eoc", name: "Algebra 1B End of Course",       course_id: "course-2", test_type: "EOC", school_year_id: "sy-2627", scope: "district", question_count: 8,  is_published: true, opens_at: _addDays(-15), closes_at: _addDays(120) },
+  { id: "test-biola-boc", name: "Biology A Beginning of Course",  course_id: "course-9", test_type: "BOC", school_year_id: "sy-2627", scope: "district", question_count: 6,  is_published: true, opens_at: _addDays(-30), closes_at: _addDays(60) },
 ];
 
 // --- Questions --------------------------------------------------------------

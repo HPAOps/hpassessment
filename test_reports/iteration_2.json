@@ -1,0 +1,31 @@
+{
+  "summary": "Iteration 2 re-verification PASSED. All CRITICAL and MEDIUM bugs from iteration_1 are fixed. Student full test flow (login -> course pick -> teacher verify -> pick live BOC -> answer Q1 A -> autosave 'All changes saved' -> next to Q2 -> answer B -> jump back via nav-q-1 -> submit-test-btn -> submit-confirm -> /student/submitted/{attemptId}) works end-to-end. 'Already submitted' badge shows on the card after re-entry. Campus_admin (madison@hpa.test) sees Active campuses KPI = 1 and Campus comparison chart x-axis shows only 'Madison HP' (no leak of HP/HPW). Tests page publish toggle flips to Published with sonner toast 'Test published'; Preview button navigates to /admin/tests/{id}/preview. Reports -> Question Analysis tab renders the 30-row table with percent + most-picked wrong answers. Note: student 100001 is pre-seeded with submitted BOC/EOC attempts in demoData.js (students.slice(0,24)), so the new test-taking flow had to be exercised with student 100025 who isn't in the seeded-submissions slice; this is a seed-design choice, not a bug — and 100001 correctly shows the 'Already submitted' badges the spec asks for.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminDashboard charts (Recharts)", "issue": "Console still emits 6x 'width(-1) and height(-1)' warnings on first render of /admin/dashboard (Campus comparison, Course performance, Growth distribution). Charts do render correctly after mount; cosmetic only. Fix from iteration_1 (wrapping Reports Recharts with min-h div) was not applied to Dashboard.jsx charts.", "selector": "ResponsiveContainer in Dashboard.jsx", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "OPTIONAL polish: apply the same min-height wrapper fix used in Reports.jsx to the three ResponsiveContainer usages in /app/frontend/src/pages/admin/Dashboard.jsx to silence the Recharts width(-1)/height(-1) console warnings.",
+    "Consider updating the review-request script to use student 100025 (or any id >=100025) for the full test-taking walkthrough, since students.slice(0,24) in demoData.js are pre-seeded as submitted and therefore cannot start a fresh attempt on Algebra 1A BOC/EOC."
+  ],
+  "critical_code_review_comments": [
+    "demoData.js `_addDays` + `opens_at: _addDays(-30)` is a clean fix and will keep the demo live across months. Good.",
+    "StudentTestSelector correctly disables the BOC/EOC card for students whose seeded attempt.status === 'submitted' and shows 'Already submitted' badge (line 73).",
+    "Dashboard.jsx campus_admin scoping now correctly limits both the campuses[] list (Active campuses KPI=1) and the Campus comparison chart x-axis (shows only 'Madison HP').",
+    "Reports.jsx useMemo-before-early-return fix is correct (no more React hooks-order warning).",
+    "Minor: Dashboard.jsx charts are the only remaining ResponsiveContainer-0x0 source; wrap them with `<div className='h-72 min-h-[18rem] w-full'>` or equivalent to remove the warnings."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "Student flow: 6/6 PASS; Admin fixes: 5/5 PASS; Cosmetic: 1 minor LOW warning remaining"},
+  "test_credentials": "super@hpa.test / Hpa12345!, madison@hpa.test / Hpa12345!, student ids 100001 (pre-submitted) and 100025 (fresh). Staff login is at /staff/login (click 'Staff sign in' from landing).",
+  "seed_data_creation": "None — used demo seed (localStorage cleared before each run so hpa.demo.v2 re-seed is deterministic).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All iteration_1 bugs are fixed. Only remaining item is a cosmetic Recharts width(-1)/height(-1) console warning on /admin/dashboard (not on Reports). If main agent wraps Dashboard ResponsiveContainer parents with an explicit min-height/width div (same pattern used on Reports.jsx), the warnings will disappear. Use student 100025+ for fresh test-taking walkthroughs; 100001-100024 are pre-seeded with submitted BOC attempts (intentional so dashboards have data).",
+  "rca of the issue": "No outstanding bugs. Root cause of the remaining LOW warning: Dashboard's ResponsiveContainer parents do not yet have an explicit min-height set, so the first render reports width=-1/height=-1 before the flex/grid layout settles. Charts still display correctly because recharts re-measures on next tick."
+}

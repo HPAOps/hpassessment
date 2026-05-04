@@ -8,7 +8,7 @@ import * as seed from "./demoData";
 import { supabase, isDemoMode } from "./supabase";
 import { scoreAttempt, computeGrowth, shuffleSeeded } from "./scoring";
 
-const STORAGE_KEY = "hpa.demo.v1";
+const STORAGE_KEY = "hpa.demo.v2";
 
 function loadStore() {
   if (typeof window === "undefined") return null;
