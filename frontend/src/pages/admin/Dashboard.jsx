@@ -32,8 +32,10 @@ export default function AdminDashboard() {
       teachers = teachers.filter(t => t.campus_id === staff.campus_id);
       campuses = campuses.filter(c => c.id === staff.campus_id);
     } else if (role === "teacher") {
-      // For teacher we keep only their students via class assignments — simplified
+      // Teacher: RLS already filters listStudents/listAttempts down to their
+      // accessible rows in live mode. We just narrow campuses + teachers.
       teachers = teachers.filter(t => t.id === staff.teacher_id);
+      if (staff.campus_id) campuses = campuses.filter(c => c.id === staff.campus_id);
     }
     const studentIds = new Set(students.map(s => s.id));
     const attempts = data.attempts.filter(a => studentIds.has(a.student_id));
