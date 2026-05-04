@@ -1,75 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600;12..96,700;12..96,800&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 body {
     margin: 0;
-    font-family:
-        -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
-        "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
-        sans-serif;
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+}
+
+h1, h2, h3, h4, h5, h6, .font-display {
+    font-family: 'Bricolage Grotesque', 'Outfit', system-ui, sans-serif;
+    letter-spacing: -0.015em;
 }
 
 code {
-    font-family:
-        source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
+    font-family: 'JetBrains Mono', source-code-pro, Menlo, Monaco, Consolas, monospace;
 }
 
 @layer base {
     :root {
-        --background: 0 0% 100%;
-        --foreground: 0 0% 3.9%;
+        /* Light mode — HPA Navy primary, Gold secondary */
+        --background: 210 33% 98%;
+        --foreground: 219 60% 15%;
         --card: 0 0% 100%;
-        --card-foreground: 0 0% 3.9%;
+        --card-foreground: 219 60% 15%;
         --popover: 0 0% 100%;
-        --popover-foreground: 0 0% 3.9%;
-        --primary: 0 0% 9%;
-        --primary-foreground: 0 0% 98%;
-        --secondary: 0 0% 96.1%;
-        --secondary-foreground: 0 0% 9%;
-        --muted: 0 0% 96.1%;
-        --muted-foreground: 0 0% 45.1%;
-        --accent: 0 0% 96.1%;
-        --accent-foreground: 0 0% 9%;
-        --destructive: 0 84.2% 60.2%;
-        --destructive-foreground: 0 0% 98%;
-        --border: 0 0% 89.8%;
-        --input: 0 0% 89.8%;
-        --ring: 0 0% 3.9%;
-        --chart-1: 12 76% 61%;
-        --chart-2: 173 58% 39%;
-        --chart-3: 197 37% 24%;
-        --chart-4: 43 74% 66%;
-        --chart-5: 27 87% 67%;
-        --radius: 0.5rem;
+        --popover-foreground: 219 60% 15%;
+        --primary: 219 60% 15%;          /* #0F2040 navy */
+        --primary-foreground: 0 0% 100%;
+        --secondary: 215 25% 95%;
+        --secondary-foreground: 219 60% 15%;
+        --muted: 215 25% 95%;
+        --muted-foreground: 215 16% 40%;
+        --accent: 41 100% 47%;            /* #F2A900 gold */
+        --accent-foreground: 219 60% 15%;
+        --destructive: 0 84% 55%;
+        --destructive-foreground: 0 0% 100%;
+        --success: 158 64% 40%;
+        --warning: 38 92% 50%;
+        --border: 215 28% 88%;
+        --input: 215 28% 88%;
+        --ring: 219 60% 25%;
+        --chart-1: 219 60% 25%;
+        --chart-2: 41 100% 47%;
+        --chart-3: 188 70% 38%;
+        --chart-4: 263 50% 50%;
+        --chart-5: 12 76% 55%;
+        --radius: 0.625rem;
     }
     .dark {
-        --background: 0 0% 3.9%;
-        --foreground: 0 0% 98%;
-        --card: 0 0% 3.9%;
-        --card-foreground: 0 0% 98%;
-        --popover: 0 0% 3.9%;
-        --popover-foreground: 0 0% 98%;
-        --primary: 0 0% 98%;
-        --primary-foreground: 0 0% 9%;
-        --secondary: 0 0% 14.9%;
-        --secondary-foreground: 0 0% 98%;
-        --muted: 0 0% 14.9%;
-        --muted-foreground: 0 0% 63.9%;
-        --accent: 0 0% 14.9%;
-        --accent-foreground: 0 0% 98%;
-        --destructive: 0 62.8% 30.6%;
-        --destructive-foreground: 0 0% 98%;
-        --border: 0 0% 14.9%;
-        --input: 0 0% 14.9%;
-        --ring: 0 0% 83.1%;
-        --chart-1: 220 70% 50%;
-        --chart-2: 160 60% 45%;
-        --chart-3: 30 80% 55%;
-        --chart-4: 280 65% 60%;
-        --chart-5: 340 75% 55%;
+        --background: 220 50% 6%;        /* #0A1128 deep navy */
+        --foreground: 210 25% 96%;
+        --card: 219 45% 14%;             /* #111C3B */
+        --card-foreground: 210 25% 96%;
+        --popover: 219 45% 14%;
+        --popover-foreground: 210 25% 96%;
+        --primary: 41 100% 55%;          /* gold pops on dark */
+        --primary-foreground: 219 60% 10%;
+        --secondary: 219 35% 20%;
+        --secondary-foreground: 210 25% 96%;
+        --muted: 219 35% 18%;
+        --muted-foreground: 215 20% 70%;
+        --accent: 41 100% 55%;
+        --accent-foreground: 219 60% 10%;
+        --destructive: 0 70% 50%;
+        --destructive-foreground: 0 0% 100%;
+        --success: 158 64% 50%;
+        --warning: 38 92% 60%;
+        --border: 219 35% 22%;
+        --input: 219 35% 22%;
+        --ring: 41 100% 55%;
+        --chart-1: 41 100% 55%;
+        --chart-2: 188 70% 55%;
+        --chart-3: 263 60% 65%;
+        --chart-4: 158 64% 55%;
+        --chart-5: 12 76% 65%;
     }
 }
 
@@ -82,11 +92,47 @@ code {
     }
 }
 
+@layer utilities {
+    .overline {
+        @apply text-xs uppercase font-medium tracking-[0.18em] text-muted-foreground;
+    }
+    .brand-gradient {
+        background: linear-gradient(135deg, hsl(var(--primary)) 0%, hsl(219 60% 25%) 100%);
+    }
+    .gold-underline {
+        position: relative;
+    }
+    .gold-underline::after {
+        content: "";
+        position: absolute;
+        bottom: -6px;
+        left: 0;
+        width: 48px;
+        height: 3px;
+        background: hsl(var(--accent));
+        border-radius: 2px;
+    }
+    .grain {
+        position: relative;
+    }
+    .grain::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='0.9' /%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.6'/%3E%3C/svg%3E");
+        opacity: 0.04;
+        mix-blend-mode: overlay;
+    }
+    .focus-ring {
+        @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background;
+    }
+}
+
 @layer base {
     [data-debug-wrapper="true"] {
         display: contents !important;
     }
-
     [data-debug-wrapper="true"] > * {
         margin-left: inherit;
         margin-right: inherit;
@@ -112,4 +158,12 @@ code {
         border-top-color: inherit;
         border-bottom-color: inherit;
     }
+}
+
+/* Smooth scroll for question navigator */
+html { scroll-behavior: smooth; }
+
+/* Larger tap targets on Chromebook */
+@media (max-width: 1440px) {
+    .student-answer-btn { min-height: 4.5rem; }
 }

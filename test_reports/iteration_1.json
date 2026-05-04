@@ -1,0 +1,36 @@
+{
+  "summary": "First-pass UI testing of HPA Course Growth Assessments (Demo Mode). Student login + course picker + teacher verify work. Admin flows (Dashboard, Tests, Question Bank, Answer Keys, OneRoster, Test Import, Reports, Audit, Settings, Campus/Teacher logins) all render and respond. CRITICAL BLOCKER: every seeded test window in demoData.js is in the FUTURE relative to current date (Jan 2026) so the student Test Selector always shows 'No open tests right now' — the student cannot reach the actual test taking screen, autosave, navigator, or submit flow. Dashboards already show seeded data, so this is purely a seed-date issue.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "StudentTestSelector + demoData.js", "issue": "All seeded test windows (test-alg1a-boc, alg1a-eoc, alg1b-boc, alg1b-eoc, biola-boc) have opens_at >= 2026-08-03. Today is Jan 2026, so getOpenTestsForCourse() returns []. Student sees 'No open tests right now' for every course and cannot start a test. This blocks the entire test-taking, autosave, navigator and submit flow described in the test requirements.", "selector": "[data-testid='test-pick-*']", "priority": "CRITICAL"},
+      {"component": "Madison campus_admin Dashboard / Roster snapshot", "issue": "Campus admin (madison@hpa.test) sees 'Active campuses: 3' and the Campus comparison chart still lists Madison HP, HP, HP West on the x-axis. For a campus_admin scoped to c-mhp the snapshot/labels should be limited to their campus (or show only 1 active campus). Data values are correctly zeroed for the other two campuses, so scoping is partial but UI still leaks campus names.", "selector": "Roster snapshot card / campus-comparison chart", "priority": "MEDIUM"},
+      {"component": "Admin Dashboard charts (Recharts)", "issue": "Recharts emits 'width(-1) and height(-1)' warnings on first render — charts still draw, but indicates ResponsiveContainer parent is briefly 0×0. Cosmetic.", "selector": "ResponsiveContainer in Dashboard.jsx", "priority": "LOW"}
+    ],
+    "integration_issues": [
+      {"flow": "Student Test (auto-save / navigator / submit)", "issue": "Could not be exercised because no test was reachable (see CRITICAL above). All testids in StudentTest.jsx (answer-A..D, nav-q-N, autosave-indicator, next-question, prev-question, submit-test-btn, submit-confirm) are wired correctly per code review, but cannot be runtime-verified until a test window includes today.", "affected_selectors": ["[data-testid='answer-A']","[data-testid='nav-q-1']","[data-testid='submit-test-btn']","[data-testid='submit-confirm']","[data-testid='autosave-indicator']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "FIX SEED DATA: In /app/frontend/src/lib/demoData.js update the five `tests` rows so opens_at <= today (Jan 2026) and closes_at is well in the future, e.g. opens_at: '2026-01-01', closes_at: '2026-12-31'. Otherwise the student-facing assessment flow is completely blocked. After fix, re-seed by clearing localStorage or bumping the version key so existing browsers pick up the new dates.",
+    "Tighten campus_admin scoping on AdminDashboard: Roster snapshot should respect session.campus_id (Active campuses=1 for madison@hpa.test) and Campus comparison chart should optionally hide other campuses or show only the scoped one.",
+    "Optionally suppress Recharts 0×0 warning by giving ResponsiveContainer parents an explicit min-height."
+  ],
+  "critical_code_review_comments": [
+    "demoData.js test windows hardcoded to Aug/Dec 2026 and 2027 — must be relative to current date or wide-open in demo seed; otherwise the demo cannot demonstrate the core user journey.",
+    "RouteGuards uses localStorage session — fine for demo, but on Supabase wiring make sure profile.role is loaded BEFORE rendering protected children to avoid role flicker / bypass.",
+    "AppShell logout testid is `staff-logout-btn` (not `logout-btn`) — make sure documentation/tests use the correct id.",
+    "Campus scoping logic on Dashboard: filter is applied to data series but not to chart axis labels or 'Active campuses' KPI — unify scoping in one helper to avoid drift across pages.",
+    "Question Bank renders all 10 question images even before lazy-load; consider IntersectionObserver lazy load or pagination for tests with many questions."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (skipped per request)", "frontend": "Student flow: 3/6 reachable steps PASS, test-taking blocked by seed; Admin flows: 11/12 PASS"},
+  "test_credentials": "Used /app/memory/test_credentials.md: super@hpa.test / Hpa12345!, madison@hpa.test / Hpa12345!, teacher@hpa.test / Hpa12345!, student 100001",
+  "seed_data_creation": "None — used app's bundled demo seed.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "After main agent fixes test window dates in demoData.js, re-test: (1) Student 100001 -> Algebra 1A -> Yes teacher -> select BOC -> answer A on q1 -> verify autosave-indicator + nav-q-1 turns answered -> next-question -> answer B -> nav-q-1 click -> submit-test-btn -> submit-confirm -> /student/submitted/{id}. (2) Re-verify Madison campus scoping after any fix. (3) Tests page: toggle publish-toggle for a test row; create test dialog Course/Type combos. Note actual testids: course-pick-{id}, teacher-verify-yes/no, test-pick-{id}, next-question, prev-question, staff-logout-btn (not the names in the original review_request).",
+  "rca of the issue": "RCA: getOpenTestsForCourse in /app/frontend/src/lib/api.js filters by `opens_at <= today && closes_at >= today`. demoData.js seeds tests with opens_at='2026-08-03' and beyond. Today (Jan 2026) is BEFORE every opens_at value, so the function always returns []. StudentTestSelector.jsx renders the EmptyState 'No open tests right now'. Reproduction: log in as student 100001, pick any course, confirm teacher, observe empty test list. Mitigation: change opens_at on at least the BOC tests to '2026-01-01' (or compute opens_at dynamically from `new Date()` in demoData) so the demo always has a live window."
+}
