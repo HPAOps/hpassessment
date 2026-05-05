@@ -66,7 +66,11 @@ Deno.serve(async (req: Request) => {
   const clientId     = secretMap.get('oneroster_api_client_id');
   const clientSecret = secretMap.get('oneroster_api_client_secret');
   const tokenUrl     = secretMap.get('oneroster_api_token_url');
-  const baseUrl      = (secretMap.get('oneroster_api_base_url') || '').replace(/\/+$/, '');
+  // Preserve query string (e.g. ?appName=hpa) — only strip trailing slashes on the path
+  const rawBaseUrl   = secretMap.get('oneroster_api_base_url') || '';
+  const baseUrl      = rawBaseUrl.includes('?')
+    ? rawBaseUrl
+    : rawBaseUrl.replace(/\/+$/, '');
 
   if (!clientId || !clientSecret || !tokenUrl || !baseUrl) {
     const runId = await recordSyncRun(admin, {
@@ -97,7 +101,7 @@ Deno.serve(async (req: Request) => {
       actorEmail,
       error: warnings.length ? warnings.join('; ') : null,
       row_counts,
-      details: { started_at: startedAt, base_url: baseUrl },
+      details: { started_at: startedAt, base_url: baseUrl, sample_urls: sampleUrls(baseUrl) },
     });
 
     return json(200, {
@@ -159,8 +163,16 @@ const COLLECTIONS = [
 async function fetchCollection(baseUrl: string, path: string, token: string) {
   const out: any[] = [];
   let offset = 0;
+  // Preserve any query string the user included in the Base URL (e.g. ?appName=hpa)
+  const [baseRoot, baseQuery = ''] = baseUrl.split('?');
+  const basePathRooted = baseRoot.replace(/\/+$/, '');
   for (;;) {
-    const u = new URL(baseUrl + path);
+    const u = new URL(basePathRooted + path);
+    if (baseQuery) {
+      for (const [k, v] of new URLSearchParams(baseQuery)) {
+        u.searchParams.set(k, v);
+      }
+    }
     u.searchParams.set('limit',  String(PAGE_LIMIT));
     u.searchParams.set('offset', String(offset));
     const resp = await fetch(u, { headers: { Authorization: `Bearer ${token}` } });
@@ -335,4 +347,22 @@ async function recordSyncRun(admin: any, p: {
   });
   if (error) console.error('record_sync_run failed:', error);
   return data ?? null;
+}
+
+// Build the first full URL for each collection — useful in sync_runs.details
+// to debug empty responses.
+function sampleUrls(baseUrl: string): string[] {
+  const [baseRoot, baseQuery = ''] = baseUrl.split('?');
+  const basePathRooted = baseRoot.replace(/\/+$/, '');
+  return COLLECTIONS.slice(0, 3).map(c => {
+    const u = new URL(basePathRooted + c.path);
+    if (baseQuery) {
+      for (const [k, v] of new URLSearchParams(baseQuery)) {
+        u.searchParams.set(k, v);
+      }
+    }
+    u.searchParams.set('limit', '5000');
+    u.searchParams.set('offset', '0');
+    return u.toString();
+  });
 }
