@@ -26,14 +26,37 @@ export async function staffSignInWithMicrosoft() {
 // Called by the OAuth callback page after Supabase finishes the redirect.
 export async function hydrateStaffSessionFromSupabase() {
   if (isDemoMode || !supabase) return null;
-  const { data: { user } } = await supabase.auth.getUser();
+
+  // Wait briefly for Supabase to finish parsing the URL fragment into a session.
+  let user = null;
+  for (let i = 0; i < 6 && !user; i++) {
+    const { data } = await supabase.auth.getUser();
+    user = data?.user || null;
+    if (!user) await new Promise(r => setTimeout(r, 250));
+  }
   if (!user) return null;
-  const { data: profile, error } = await supabase
+
+  // Prefer the already-provisioned profile.
+  let { data: profile } = await supabase
     .from("profiles").select("*").eq("id", user.id).maybeSingle();
-  if (error) throw error;
+
+  // If the trigger didn't create a profile (timing, whitelist added after
+  // first sign-in, etc.), call the self-heal RPC. It re-checks the whitelist
+  // and either provisions the profile or raises a clear error.
+  if (!profile) {
+    const { data, error } = await supabase.rpc("ensure_profile_from_whitelist");
+    if (error) {
+      // Propagate the Postgres exception message verbatim so the user sees
+      // exactly why they're blocked (e.g., "email not authorized …").
+      throw new Error(error.message);
+    }
+    profile = data;
+  }
+
   if (!profile) {
     throw new Error("Your email is not yet authorized for HPA Growth Assessments. Please contact your district admin.");
   }
+
   const session = {
     kind: "staff",
     email: user.email,

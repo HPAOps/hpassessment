@@ -24,7 +24,7 @@ export default function StaffOAuthCallback() {
           if (refreshStaff) refreshStaff(session);
           nav("/admin/dashboard", { replace: true });
         } else {
-          setErr("We couldn't complete sign-in. Please try again.");
+          setErr("We couldn't read your Microsoft session. Please try signing in again.");
         }
       } catch (e) {
         if (!cancelled) setErr(e.message || "Sign-in failed.");
