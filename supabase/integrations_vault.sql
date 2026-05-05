@@ -20,8 +20,8 @@ create table if not exists public.app_secrets (
 
 alter table public.app_secrets enable row level security;
 
-drop policy if exists "secrets_super_rw" on public.app_secrets;
-create policy "secrets_super_rw" on public.app_secrets
+drop policy if exists secrets_super_rw on public.app_secrets;
+create policy secrets_super_rw on public.app_secrets
   for all using (public.is_super_admin()) with check (public.is_super_admin());
 
 -- List secrets — MASKED. Never returns the actual value.
