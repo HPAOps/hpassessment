@@ -471,11 +471,26 @@ export async function createTest(test, actor) {
     persist();
     return row;
   }
-  const payload = { ...test };
+  // Pull out join-table fields before insert
+  const { course_ids, ...rest } = test;
+  const payload = { ...rest };
   delete payload.id;
+  // tests.course_id (legacy, single) = first selected course (primary)
+  if (Array.isArray(course_ids) && course_ids.length) {
+    payload.course_id = course_ids[0];
+  }
   const { data, error } = await supabase.from("tests").insert(payload).select("*").single();
   if (error) throw error;
-  addAudit(actor, "test.created", data.id, { name: data.name });
+  // Link all selected courses via the join table
+  const linkRows = (Array.isArray(course_ids) && course_ids.length ? course_ids : [data.course_id])
+    .filter(Boolean)
+    .map(cid => ({ test_id: data.id, course_id: cid }));
+  if (linkRows.length) {
+    const { error: linkErr } = await supabase.from("test_courses")
+      .upsert(linkRows, { onConflict: "test_id,course_id", ignoreDuplicates: true });
+    if (linkErr) throw linkErr;
+  }
+  addAudit(actor, "test.created", data.id, { name: data.name, courses: linkRows.length });
   return data;
 }
 
@@ -505,6 +520,13 @@ export async function deleteTest(testId) {
   const { error } = await supabase.rpc("delete_test", { p_test_id: testId });
   if (error) throw error;
   return { ok: true };
+}
+
+export async function listTestCourses() {
+  if (isDemoMode) return [];
+  const { data, error } = await supabase.from("test_courses").select("test_id, course_id");
+  if (error) throw error;
+  return data || [];
 }
 
 export async function upsertQuestion(q, actor) {
