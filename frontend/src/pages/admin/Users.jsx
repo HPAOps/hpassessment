@@ -5,8 +5,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { listCampuses, listStudents, listTeachers } from "@/lib/api";
-import { staff_users } from "@/lib/demoData";
+import { listCampuses, listStudents, listTeachers, listWhitelist } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function Users() {
@@ -14,6 +13,7 @@ export default function Users() {
   const [campuses, setCampuses] = useState([]);
   const [students, setStudents] = useState([]);
   const [teachers, setTeachers] = useState([]);
+  const [staffList, setStaffList] = useState([]);
   const [filter, setFilter] = useState("");
 
   useEffect(() => {
@@ -21,6 +21,9 @@ export default function Users() {
     const cId = staff?.role === "campus_admin" ? staff.campus_id : null;
     listStudents(cId).then(setStudents);
     listTeachers(cId).then(setTeachers);
+    listWhitelist().then(rows => setStaffList(
+      cId ? (rows || []).filter(r => !r.campus_id || r.campus_id === cId) : (rows || [])
+    )).catch(() => setStaffList([]));
   }, [staff]);
 
   const ff = (s) => s.toLowerCase().includes(filter.toLowerCase());
@@ -36,7 +39,7 @@ export default function Users() {
         <TabsList>
           <TabsTrigger value="students">Students ({students.length})</TabsTrigger>
           <TabsTrigger value="teachers">Teachers ({teachers.length})</TabsTrigger>
-          <TabsTrigger value="staff">Staff ({staff_users.length})</TabsTrigger>
+          <TabsTrigger value="staff" data-testid="staff-tab">Staff ({staffList.length})</TabsTrigger>
         </TabsList>
         <TabsContent value="students" className="mt-4">
           <Card><CardContent className="p-0">
@@ -76,16 +79,19 @@ export default function Users() {
         <TabsContent value="staff" className="mt-4">
           <Card><CardContent className="p-0">
             <Table>
-              <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Campus</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>Email</TableHead><TableHead>Role</TableHead><TableHead>Campus</TableHead><TableHead>Source</TableHead></TableRow></TableHeader>
               <TableBody>
-                {staff_users.map(u => (
-                  <TableRow key={u.email}>
-                    <TableCell>{u.name}</TableCell>
+                {staffList.filter(u => ff(`${u.email} ${u.role}`)).map(u => (
+                  <TableRow key={u.id || u.email} data-testid={`staff-row-${u.email}`}>
                     <TableCell className="font-mono text-xs">{u.email}</TableCell>
-                    <TableCell><Badge variant="outline">{u.role.replace("_", " ")}</Badge></TableCell>
-                    <TableCell>{u.campus_id ? campuses.find(c=>c.id===u.campus_id)?.name : "—"}</TableCell>
+                    <TableCell><Badge variant="outline">{(u.role || "").replace("_", " ")}</Badge></TableCell>
+                    <TableCell>{u.campus_id ? (campuses.find(c => c.id === u.campus_id)?.name || "—") : <span className="text-xs text-muted-foreground italic">all campuses</span>}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{u.tenant_hint === "oneroster_auto" ? "OneRoster sync" : (u.tenant_hint || "manual")}</TableCell>
                   </TableRow>
                 ))}
+                {staffList.length === 0 && (
+                  <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-12">No staff configured yet. Run a OneRoster sync to import teachers, or add manually on Integrations → Staff Access.</TableCell></TableRow>
+                )}
               </TableBody>
             </Table>
           </CardContent></Card>

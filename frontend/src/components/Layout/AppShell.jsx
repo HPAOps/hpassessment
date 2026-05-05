@@ -13,7 +13,6 @@ const NAV = [
   { label: "Question Bank",       to: "/admin/questions",      icon: ImageIcon,       roles: ["super_admin","district_admin"] },
   { label: "Answer Keys",         to: "/admin/answer-keys",    icon: KeyRound,        roles: ["super_admin","district_admin"] },
   { label: "Test Import",         to: "/admin/test-import",    icon: FolderUp,        roles: ["super_admin","district_admin"] },
-  { label: "OneRoster Import",    to: "/admin/oneroster",      icon: Upload,          roles: ["super_admin","district_admin"] },
   { label: "Reports",             to: "/admin/reports",        icon: BookMarked,      roles: ["super_admin","district_admin","campus_admin","teacher"] },
   { label: "Campuses",            to: "/admin/campuses",       icon: Building2,       roles: ["super_admin","district_admin"] },
   { label: "Users",               to: "/admin/users",          icon: UsersIcon,       roles: ["super_admin","district_admin","campus_admin"] },

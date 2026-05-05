@@ -168,6 +168,13 @@ export async function listGrowthResults() {
   return data || [];
 }
 
+export async function listCourseSections() {
+  if (isDemoMode) return store().course_sections;
+  const { data, error } = await supabase.from("course_sections").select("*");
+  if (error) throw error;
+  return data || [];
+}
+
 export async function getSettings() {
   if (isDemoMode) return store().app_settings;
   const { data, error } = await supabase.from("app_settings").select("*").eq("id", 1).maybeSingle();
@@ -486,6 +493,18 @@ export async function updateTest(testId, patch, actor) {
   if (error) throw error;
   addAudit(actor, "test.updated", testId, patch);
   return data;
+}
+
+export async function deleteTest(testId) {
+  if (isDemoMode) {
+    const s = store();
+    s.tests = s.tests.filter(x => x.id !== testId);
+    persist();
+    return { ok: true };
+  }
+  const { error } = await supabase.rpc("delete_test", { p_test_id: testId });
+  if (error) throw error;
+  return { ok: true };
 }
 
 export async function upsertQuestion(q, actor) {

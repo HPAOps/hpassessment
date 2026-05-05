@@ -38,7 +38,25 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   with the pre-assigned role/campus/teacher mapping.
 - Break-glass email/password login retained for emergencies.
 
-## Phase C — OneRoster REST API sync (in progress 2026-02)
+## v2 simplifications (in progress 2026-02)
+
+- Item 1: OneRoster sync now filters out non-active users at mapping time.
+- Item 2: Users page → Staff tab now reads from `staff_whitelist` (real
+  signed-in staff + auto-synced teachers), no more demo array.
+- Item 3: New `v2_simplifications.sql` deletes seed students, teachers,
+  tests, courses, sections, terms, and seed campuses (`OR-S-`, `OR-T-`,
+  `OR-COURSE-`, etc.).
+- Item 4: Tests are course-level (1 test = many sections at many campuses);
+  Tests page shows section count badge per test.
+- Item 5: `OneRoster Import` removed from nav (route still works for fallback).
+- Item 6: Single test row carries BOTH `boc_opens_at/closes_at` + `eoc_opens_at/closes_at`.
+  `test_attempts.phase` enum (BOC|EOC) auto-set from current date.
+  `submit_attempt` pairs BOC/EOC by SAME `test_id` for growth calc.
+- Item 7: `delete_test(uuid)` RPC + UI button (super_admin only, full cascade).
+- **Status**: code complete; pending user execution of `v2_simplifications.sql`
+  and Edge Function redeploy.
+
+## Phase C — OneRoster REST API sync (completed 2026-02)
 
 - Pivoted from SFTP to OneRoster v1.2 REST API after Infinite Campus
   provided OAuth 2.0 client_credentials rather than SFTP access.

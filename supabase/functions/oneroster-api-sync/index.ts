@@ -254,6 +254,10 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   const students: any[] = [];
   const teachers: any[] = [];
   for (const u of (d.users ?? [])) {
+    // Item 1: Only pull active users
+    const userStatus = String(u.status || 'active').toLowerCase();
+    if (userStatus !== 'active') continue;
+
     const roles = Array.isArray(u.roles) ? u.roles : [];
     const roleStrs = roles.length
       ? roles.map((r: any) => String(r.role || r).toLowerCase())
