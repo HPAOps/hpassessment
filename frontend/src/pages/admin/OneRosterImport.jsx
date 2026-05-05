@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Loader2, Upload, FileCheck2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { ONEROSTER_FILES, parseOneRosterZip, mapOneRosterToOperational } from "@/lib/oneroster";
-import { recordOneRosterImport, applyOneRosterMapping, listOneRosterImports } from "@/lib/api";
+import { recordOneRosterImport, applyOneRosterMapping, listOneRosterImports, recordSyncRun } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 
@@ -39,18 +39,41 @@ export default function OneRosterImport() {
 
   async function commit() {
     if (!mapping) return;
-    await applyOneRosterMapping(mapping.records, staff?.email);
-    await recordOneRosterImport({
-      filename: parsed.filename,
-      files_seen: parsed.filesSeen,
-      counts: mapping.counts,
-      errors: parsed.errors,
-      status: parsed.errors.length === 0 ? "completed" : "completed_with_errors",
-    }, staff?.email);
-    toast.success("Roster imported");
-    setParsed(null); setMapping(null);
-    setHistory(await listOneRosterImports());
-    if (fileInput.current) fileInput.current.value = "";
+    const startedAt = new Date().toISOString();
+    try {
+      await applyOneRosterMapping(mapping.records, staff?.email);
+      await recordOneRosterImport({
+        filename: parsed.filename,
+        files_seen: parsed.filesSeen,
+        counts: mapping.counts,
+        errors: parsed.errors,
+        status: parsed.errors.length === 0 ? "completed" : "completed_with_errors",
+      }, staff?.email);
+      await recordSyncRun({
+        category: "oneroster_sftp",
+        source: "manual_zip",
+        status: parsed.errors.length === 0 ? "success" : "partial",
+        row_counts: mapping.counts,
+        error_message: parsed.errors.length ? `${parsed.errors.length} parse errors` : null,
+        details: { filename: parsed.filename, files_seen: parsed.filesSeen },
+        started_at: startedAt,
+      }).catch(() => {}); // non-fatal — import already succeeded
+      toast.success("Roster imported");
+      setParsed(null); setMapping(null);
+      setHistory(await listOneRosterImports());
+      if (fileInput.current) fileInput.current.value = "";
+    } catch (err) {
+      await recordSyncRun({
+        category: "oneroster_sftp",
+        source: "manual_zip",
+        status: "failed",
+        row_counts: {},
+        error_message: err?.message || String(err),
+        details: { filename: parsed?.filename },
+        started_at: startedAt,
+      }).catch(() => {});
+      toast.error("Import failed: " + (err?.message || err));
+    }
   }
 
   return (

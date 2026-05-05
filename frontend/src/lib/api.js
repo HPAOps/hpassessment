@@ -777,3 +777,38 @@ export async function deleteWhitelist(email) {
   if (error) throw error;
   return { ok: true };
 }
+
+// ---------------------------------------------------------------------------
+// SYNC RUNS (integration run history)
+// ---------------------------------------------------------------------------
+
+export async function recordSyncRun({ category, source, status, row_counts, error_message, details, started_at }) {
+  if (isDemoMode) return { id: uid("sync") };
+  const { data, error } = await supabase.rpc("record_sync_run", {
+    p_category: category,
+    p_source: source,
+    p_status: status,
+    p_row_counts: row_counts || {},
+    p_error_message: error_message || null,
+    p_details: details || {},
+    p_started_at: started_at || null,
+  });
+  if (error) throw error;
+  return { id: data };
+}
+
+export async function listSyncRunsLatest() {
+  if (isDemoMode) return [];
+  const { data, error } = await supabase.rpc("sync_runs_latest");
+  if (error) throw error;
+  return data || [];
+}
+
+export async function listSyncRunsRecent({ category = null, limit = 20 } = {}) {
+  if (isDemoMode) return [];
+  const { data, error } = await supabase.rpc("sync_runs_recent", {
+    p_category: category, p_limit: limit,
+  });
+  if (error) throw error;
+  return data || [];
+}

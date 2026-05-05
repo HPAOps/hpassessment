@@ -4,13 +4,15 @@ import { StatCard } from "@/components/common/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
-import { listAttempts, listCampuses, listCourses, listGrowthResults, listStudents, listTeachers, listTests } from "@/lib/api";
-import { BarChart3, Users, Building2, GraduationCap, TrendingUp, ClipboardList } from "lucide-react";
+import { listAttempts, listCampuses, listCourses, listGrowthResults, listStudents, listTeachers, listTests, listSyncRunsLatest } from "@/lib/api";
+import { BarChart3, Users, Building2, GraduationCap, TrendingUp, ClipboardList, CheckCircle2, AlertCircle, XCircle, Clock } from "lucide-react";
+import { Link } from "react-router-dom";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, LineChart, Line, PieChart, Pie, Cell } from "recharts";
 
 export default function AdminDashboard() {
   const { staff } = useAuth();
   const [data, setData] = useState(null);
+  const [rosterSync, setRosterSync] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -20,6 +22,14 @@ export default function AdminDashboard() {
       setData({ campuses, courses, students, teachers, tests, attempts, growth });
     })();
   }, []);
+
+  useEffect(() => {
+    const role = staff?.role;
+    if (role !== "super_admin" && role !== "district_admin") return;
+    listSyncRunsLatest()
+      .then(runs => setRosterSync(runs.find(r => r.category === "oneroster_sftp") || null))
+      .catch(() => setRosterSync(null));
+  }, [staff]);
 
   const filtered = useMemo(() => {
     if (!data) return null;
@@ -88,6 +98,8 @@ export default function AdminDashboard() {
         title={titleForRole(staff)}
         subtitle="Real-time view of completion, scores, and growth across the district."
       />
+
+      <RosterSyncBanner run={rosterSync} role={staff?.role} />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard testId="kpi-students-tested" label="Students Tested" value={studentsTested} sub={`${completionRate}% completion`} icon={Users} />
@@ -201,4 +213,93 @@ function titleForRole(staff) {
     case "teacher": return "Teacher Overview";
     default: return "Dashboard";
   }
+}
+
+
+function RosterSyncBanner({ run, role }) {
+  if (role !== "super_admin" && role !== "district_admin") return null;
+
+  if (!run) {
+    return (
+      <div
+        className="mb-6 rounded-lg border border-dashed border-border bg-muted/30 px-4 py-3 flex items-center justify-between gap-4"
+        data-testid="roster-sync-banner-empty"
+      >
+        <div className="flex items-center gap-3">
+          <Clock className="h-4 w-4 text-muted-foreground" />
+          <div>
+            <div className="text-sm font-medium">Roster sync — no runs yet</div>
+            <div className="text-xs text-muted-foreground">Import a OneRoster ZIP or configure the SFTP integration to begin nightly roster sync.</div>
+          </div>
+        </div>
+        <Link
+          to="/admin/integrations"
+          className="text-xs font-medium text-[hsl(var(--accent))] hover:underline whitespace-nowrap"
+          data-testid="roster-sync-banner-cta"
+        >
+          Configure integrations →
+        </Link>
+      </div>
+    );
+  }
+
+  const ok = run.status === "success";
+  const failed = run.status === "failed";
+  const Icon = ok ? CheckCircle2 : failed ? XCircle : AlertCircle;
+  const colorClass = ok
+    ? "text-[hsl(var(--success))]"
+    : failed
+      ? "text-[hsl(var(--destructive))]"
+      : "text-[hsl(var(--warning))]";
+  const borderClass = ok
+    ? "border-[hsl(var(--success))]/30"
+    : failed
+      ? "border-[hsl(var(--destructive))]/40"
+      : "border-[hsl(var(--warning))]/40";
+  const counts = run.row_counts || {};
+  const countSummary = Object.entries(counts).slice(0, 4).map(([k, v]) => `${v} ${k}`).join(" · ");
+  const when = new Date(run.completed_at || run.started_at);
+  const ago = relTime(when);
+
+  return (
+    <div
+      className={`mb-6 rounded-lg border ${borderClass} bg-card px-4 py-3 flex items-center justify-between gap-4`}
+      data-testid="roster-sync-banner"
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        <Icon className={`h-5 w-5 shrink-0 ${colorClass}`} />
+        <div className="min-w-0">
+          <div className="text-sm font-medium flex items-center gap-2">
+            Roster sync {ok ? "up to date" : failed ? "failed" : "completed with warnings"}
+            <span className="text-xs font-normal text-muted-foreground">· {run.source.replace(/_/g, " ")}</span>
+          </div>
+          <div className="text-xs text-muted-foreground truncate">
+            {ago} · {when.toLocaleString()}
+            {countSummary ? ` · ${countSummary}` : ""}
+            {run.error_message ? ` · ${run.error_message}` : ""}
+          </div>
+        </div>
+      </div>
+      <Link
+        to="/admin/integrations"
+        className="text-xs font-medium text-[hsl(var(--accent))] hover:underline whitespace-nowrap"
+        data-testid="roster-sync-banner-cta"
+      >
+        View integrations →
+      </Link>
+    </div>
+  );
+}
+
+function relTime(date) {
+  const diff = Date.now() - date.getTime();
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hr ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d} day${d === 1 ? "" : "s"} ago`;
+  return `${Math.floor(d / 7)} wk ago`;
 }

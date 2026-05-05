@@ -11,11 +11,12 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { CheckCircle2, AlertCircle, Plug, ShieldCheck, Users, KeyRound, RotateCcw, Trash2, Plus, Lock } from "lucide-react";
+import { CheckCircle2, AlertCircle, Plug, ShieldCheck, Users, KeyRound, RotateCcw, Trash2, Plus, Lock, Clock, XCircle, Activity } from "lucide-react";
 import {
   listSecrets, setSecret, clearSecret, INTEGRATION_CATALOG,
   listWhitelist, upsertWhitelist, deleteWhitelist,
   listCampuses, listTeachers,
+  listSyncRunsLatest, listSyncRunsRecent,
 } from "@/lib/api";
 import { isDemoMode } from "@/lib/supabase";
 
@@ -64,8 +65,19 @@ export default function Integrations() {
 
 function IntegrationList({ isSuper }) {
   const [secrets, setSecrets] = useState(null);
+  const [latestRuns, setLatestRuns] = useState([]);
+  const [recentRuns, setRecentRuns] = useState([]);
 
-  async function refresh() { setSecrets(await listSecrets()); }
+  async function refresh() {
+    const [s, latest, recent] = await Promise.all([
+      listSecrets(),
+      listSyncRunsLatest().catch(() => []),
+      listSyncRunsRecent({ limit: 10 }).catch(() => []),
+    ]);
+    setSecrets(s);
+    setLatestRuns(latest);
+    setRecentRuns(recent);
+  }
   useEffect(() => { refresh(); }, []);
 
   function statusFor(category) {
@@ -81,9 +93,11 @@ function IntegrationList({ isSuper }) {
   if (secrets === null) return <div className="text-sm text-muted-foreground">Loading…</div>;
 
   return (
+    <>
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {INTEGRATION_CATALOG.map(it => {
         const status = statusFor(it.category);
+        const lastRun = latestRuns.find(r => r.category === it.category);
         return (
           <Card key={it.category} data-testid={`integration-${it.category}`}>
             <CardContent className="p-6">
@@ -102,6 +116,8 @@ function IntegrationList({ isSuper }) {
                   {status.lastBy ? <> by <span className="font-mono">{status.lastBy}</span></> : null}
                 </div>
               )}
+
+              <LastSyncRow run={lastRun} />
 
               <div className="mt-4 flex gap-2">
                 <ConfigureIntegrationDialog integration={it} secrets={secrets} onDone={refresh} disabled={!isSuper}>
@@ -127,6 +143,97 @@ function IntegrationList({ isSuper }) {
         );
       })}
     </div>
+
+    <RecentRunsTable runs={recentRuns} />
+    </>
+  );
+}
+
+function LastSyncRow({ run }) {
+  if (!run) {
+    return (
+      <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground" data-testid="last-sync-none">
+        <Clock className="h-3.5 w-3.5" />
+        No sync runs yet
+      </div>
+    );
+  }
+  const ok = run.status === "success";
+  const partial = run.status === "partial";
+  const failed = run.status === "failed";
+  const Icon = ok ? CheckCircle2 : failed ? XCircle : AlertCircle;
+  const colorClass = ok
+    ? "text-[hsl(var(--success))]"
+    : failed
+      ? "text-[hsl(var(--destructive))]"
+      : "text-[hsl(var(--warning))]";
+  const counts = run.row_counts || {};
+  const countSummary = Object.entries(counts).slice(0, 4).map(([k, v]) => `${v} ${k}`).join(" · ");
+  return (
+    <div className="mt-3 rounded-md border border-border bg-muted/30 p-3" data-testid={`last-sync-${run.category}`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm">
+          <Icon className={`h-4 w-4 ${colorClass}`} />
+          <span className="font-medium capitalize">{run.status}</span>
+          <span className="text-xs text-muted-foreground">· {run.source.replace(/_/g, " ")}</span>
+        </div>
+        <span className="text-xs text-muted-foreground font-mono">
+          {new Date(run.completed_at || run.started_at).toLocaleString()}
+        </span>
+      </div>
+      {countSummary && <div className="mt-1.5 text-xs text-muted-foreground">{countSummary}</div>}
+      {run.error_message && (
+        <div className="mt-1.5 text-xs text-[hsl(var(--destructive))] line-clamp-2">{run.error_message}</div>
+      )}
+    </div>
+  );
+}
+
+function RecentRunsTable({ runs }) {
+  if (!runs || runs.length === 0) return null;
+  return (
+    <Card className="mt-6" data-testid="sync-runs-recent">
+      <CardContent className="p-0">
+        <div className="px-5 py-4 flex items-center gap-2 border-b border-border">
+          <Activity className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-display text-sm font-semibold">Recent sync runs</h3>
+          <span className="text-xs text-muted-foreground ml-1">(last {runs.length})</span>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>When</TableHead>
+              <TableHead>Integration</TableHead>
+              <TableHead>Source</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Rows</TableHead>
+              <TableHead>Actor</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {runs.map(r => {
+              const counts = r.row_counts || {};
+              const countSummary = Object.entries(counts).slice(0, 3).map(([k, v]) => `${v} ${k}`).join(" · ");
+              return (
+                <TableRow key={r.id}>
+                  <TableCell className="font-mono text-xs whitespace-nowrap">{new Date(r.completed_at || r.started_at).toLocaleString()}</TableCell>
+                  <TableCell className="text-xs">{r.category.replace(/_/g, " ")}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{r.source.replace(/_/g, " ")}</TableCell>
+                  <TableCell>
+                    {r.status === "success" && <Badge className="bg-[hsl(var(--success))] text-white">Success</Badge>}
+                    {r.status === "partial" && <Badge variant="outline" className="border-[hsl(var(--warning))] text-[hsl(var(--warning))]">Partial</Badge>}
+                    {r.status === "failed" && <Badge variant="outline" className="border-[hsl(var(--destructive))] text-[hsl(var(--destructive))]">Failed</Badge>}
+                    {r.status === "running" && <Badge variant="outline">Running</Badge>}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{countSummary || "—"}</TableCell>
+                  <TableCell className="text-xs font-mono text-muted-foreground">{r.actor_email || "system"}</TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
