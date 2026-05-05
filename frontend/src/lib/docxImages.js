@@ -28,31 +28,52 @@ export async function extractDocxImages(file) {
     const target = r.getAttribute("Target"); // e.g. "media/image1.png"
     const type = r.getAttribute("Type") || "";
     if (id && target && type.endsWith("/image")) {
-      // Targets in rels are relative to "word/", so prefix accordingly.
       rIdToTarget.set(id, target.startsWith("/") ? target.slice(1) : `word/${target}`);
     }
   }
 
-  // 2) Walk document.xml and collect rIds in textual order.
+  // 2) Read document.xml and walk it in order, tracking the most recently
+  //    seen question number marker ("1)", "2)", etc.) so images BEFORE the
+  //    first marker (logos, headers) are skipped, and each image attaches
+  //    to the question number it appears under.
   const docFile = zip.file("word/document.xml");
   if (!docFile) throw new Error("Not a valid .docx (missing word/document.xml)");
   const docXml = await docFile.async("string");
 
-  // We use a regex over the raw XML rather than a DOM walk because Word inlines
-  // rIds as `r:embed="rId7"` regardless of whether the drawing is inline or
-  // anchored. Order of regex matches preserves document order.
-  const orderedRIds = [];
-  const re = /r:embed="(rId\d+)"|r:link="(rId\d+)"/g;
+  // Tokens: either an inline text block (to scan for "N)") or an image rId.
+  const tokenRe = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|r:embed="(rId\d+)"|r:link="(rId\d+)"/g;
+  // Match question number marker like "1)" "12)" "33)"
+  const qnRe = /(?:^|[\s>])(\d{1,3})\)\s*(?:$|[\s<])/;
+
+  const imageByQn = new Map(); // qn -> {rid, ext, blob, dataUrl} (first wins)
+  let currentQn = null;
+
   let m;
-  while ((m = re.exec(docXml)) !== null) {
-    const rid = m[1] || m[2];
-    if (rid) orderedRIds.push(rid);
+  while ((m = tokenRe.exec(docXml)) !== null) {
+    const txt = m[1];
+    const rid = m[2] || m[3];
+    if (txt) {
+      // Decode entities and scan for "N)" — there can be multiple in one chunk
+      const decoded = txt.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+      const padded = " " + decoded + " "; // pad so qnRe word boundaries work at edges
+      const qm = padded.match(qnRe);
+      if (qm) {
+        const n = parseInt(qm[1], 10);
+        if (n > 0 && n < 1000) currentQn = n;
+      }
+    } else if (rid && currentQn !== null) {
+      // First image after this question number wins
+      if (!imageByQn.has(currentQn)) {
+        imageByQn.set(currentQn, rid);
+      }
+    }
   }
 
-  // 3) Resolve each rId -> media file -> Blob, dedupe consecutive duplicates.
+  // 3) Resolve each rId -> media file -> Blob
   const out = [];
-  let qn = 1;
-  for (const rid of orderedRIds) {
+  const sortedQns = [...imageByQn.keys()].sort((a, b) => a - b);
+  for (const qn of sortedQns) {
+    const rid = imageByQn.get(qn);
     const path = rIdToTarget.get(rid);
     if (!path) continue;
     const mediaFile = zip.file(path);
@@ -63,7 +84,6 @@ export async function extractDocxImages(file) {
     const typedBlob = blob.type ? blob : new Blob([await blob.arrayBuffer()], { type: mime });
     const dataUrl = await blobToDataUrl(typedBlob);
     out.push({ qn, ext, blob: typedBlob, dataUrl });
-    qn++;
   }
   return out;
 }

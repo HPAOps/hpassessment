@@ -165,7 +165,7 @@ export default function TestImport() {
         const id = `${test.id}-q${qn}`;
         await upsertQuestion({
           id, test_id: test.id, question_number: qn,
-          correct_answer: ans, image_url: imageMap[qn] || `https://picsum.photos/seed/${id}/1000/640`,
+          correct_answer: ans, image_url: imageMap[qn] || null,
           is_active: true,
         }, staff?.email);
       }
