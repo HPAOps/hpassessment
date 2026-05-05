@@ -14,6 +14,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { ChevronRight, Upload, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { CourseMultiSelect } from "@/components/common/CourseMultiSelect";
+import { extractDocxImages, extractDocxText } from "@/lib/docxImages";
 
 export default function TestImport() {
   const { staff } = useAuth();
@@ -52,15 +53,25 @@ export default function TestImport() {
       });
       return out;
     }
-    // simple text fallback: lines like "1. A" or "Q1: B"
-    const text = await file.text().catch(() => "");
-    const lines = text.split(/\n+/);
+    // .docx — extract paragraph text and parse line-by-line
+    let text = "";
+    if (ext === "docx") {
+      try { text = await extractDocxText(file); }
+      catch { text = ""; }
+    } else {
+      text = await file.text().catch(() => "");
+    }
+    // Match patterns like "1 B", "1) B", "1. B", "Q1: B", or even "1 C31 C"
+    // where two answers run together (Word column layout flattens to plain text).
     const out = [];
-    lines.forEach(l => {
-      const m = l.match(/(\d+)\D+([ABCD])/i);
-      if (m) out.push({ qn: parseInt(m[1],10), ans: m[2].toUpperCase() });
-    });
-    return out;
+    const re = /(\d{1,3})\s*[\)\.\-:]?\s+([ABCD])(?![A-Z])/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      out.push({ qn: parseInt(m[1], 10), ans: m[2].toUpperCase() });
+    }
+    // De-dupe by qn (keep first)
+    const seen = new Set();
+    return out.filter(e => { if (seen.has(e.qn)) return false; seen.add(e.qn); return true; });
   }
 
   async function onKeyFile(e) {
@@ -97,6 +108,36 @@ export default function TestImport() {
     }
     setImageMap(next);
     toast.success(`${Object.keys(next).length} images mapped`);
+  }
+
+  // Booklet upload: if it's a .docx, extract embedded images in document order
+  // and auto-populate the imageMap so users don't have to upload separately.
+  async function onBookletFile(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBookletFile(f);
+    if (!f.name.toLowerCase().endsWith(".docx")) return;
+    const loading = toast.loading("Extracting question images from booklet…");
+    try {
+      const items = await extractDocxImages(f);
+      if (!items.length) {
+        toast.dismiss(loading);
+        toast.warning("No images found in this booklet. You can still upload images manually in step 3.");
+        return;
+      }
+      const next = {};
+      for (const item of items) {
+        const fileLike = new File([item.blob], `q${String(item.qn).padStart(2,"0")}.${item.ext}`, { type: item.blob.type });
+        const url = await uploadQuestionImage(fileLike);
+        next[item.qn] = url;
+      }
+      setImageMap(next);
+      toast.dismiss(loading);
+      toast.success(`Extracted ${items.length} question images from booklet`);
+    } catch (err) {
+      toast.dismiss(loading);
+      toast.error("Couldn't extract images: " + (err.message || err));
+    }
   }
 
   async function commit() {
@@ -200,9 +241,18 @@ export default function TestImport() {
           <CardContent className="p-6 space-y-6">
             <div className="grid md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Quiz / test booklet (.docx, .pdf — stored for audit)</Label>
-                <Input type="file" onChange={e => setBookletFile(e.target.files?.[0])} data-testid="ti-booklet" />
-                {bookletFile && <Badge variant="outline">{bookletFile.name}</Badge>}
+                <Label>Quiz / test booklet (.docx auto-extracts embedded images)</Label>
+                <Input type="file" accept=".docx,.pdf" onChange={onBookletFile} data-testid="ti-booklet" />
+                {bookletFile && (
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline">{bookletFile.name}</Badge>
+                    {Object.keys(imageMap).length > 0 && (
+                      <Badge className="bg-[hsl(var(--success))] text-white">
+                        {Object.keys(imageMap).length} images extracted
+                      </Badge>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Answer key (.csv, .txt, .docx)</Label>
@@ -222,8 +272,9 @@ export default function TestImport() {
         <Card>
           <CardContent className="p-6 space-y-6">
             <div className="space-y-2">
-              <Label>Question images — multiple files or a ZIP (filenames like q01.png, q02.png, …)</Label>
+              <Label>Question images <span className="text-muted-foreground font-normal">(optional — already extracted from .docx booklet)</span></Label>
               <Input type="file" multiple accept="image/*,.zip" onChange={e => handleQuestionImages(e.target.files)} data-testid="ti-images" />
+              <p className="text-xs text-muted-foreground">Use this to add or replace individual images. Filenames like q01.png, q02.png map to question numbers; a ZIP with similarly named files works too.</p>
             </div>
             <div className="grid md:grid-cols-2 gap-4 text-sm">
               <Card className="border-dashed"><CardContent className="p-4 flex items-center gap-3">
