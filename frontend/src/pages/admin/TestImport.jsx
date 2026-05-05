@@ -13,6 +13,7 @@ import { listCourses, listTests, createTest, recordTestImport, listTestImports, 
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { ChevronRight, Upload, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { CourseMultiSelect } from "@/components/common/CourseMultiSelect";
 
 export default function TestImport() {
   const { staff } = useAuth();
@@ -22,7 +23,7 @@ export default function TestImport() {
   const [schoolYears, setSchoolYears] = useState([]);
 
   const [meta, setMeta] = useState({
-    name: "", course_id: "",
+    name: "", course_ids: [],
     boc_opens_at: "", boc_closes_at: "",
     eoc_opens_at: "", eoc_closes_at: "",
     scope: "district",
@@ -109,7 +110,7 @@ export default function TestImport() {
 
       const test = await createTest({
         name: meta.name,
-        course_ids: [meta.course_id],
+        course_ids: meta.course_ids,
         school_year_id: sy?.id || null,
         scope: meta.scope,
         boc_opens_at: meta.boc_opens_at || null,
@@ -128,7 +129,7 @@ export default function TestImport() {
         }, staff?.email);
       }
       await recordTestImport({
-        course_id: meta.course_id,
+        course_id: meta.course_ids?.[0] || null,
         test_id: test.id,
         booklet_filename: bookletFile?.name,
         answer_key_filename: keyFile?.name,
@@ -138,7 +139,7 @@ export default function TestImport() {
       }, staff?.email);
       toast.success("Test imported! Review and publish from Tests.");
       setStep(1);
-      setMeta({ name:"", course_id:"", boc_opens_at:"", boc_closes_at:"", eoc_opens_at:"", eoc_closes_at:"", scope:"district" });
+      setMeta({ name:"", course_ids:[], boc_opens_at:"", boc_closes_at:"", eoc_opens_at:"", eoc_closes_at:"", scope:"district" });
       setBookletFile(null); setKeyFile(null); setKeyEntries([]); setImageMap({});
       setHistory(await listTestImports());
     } catch (e) {
@@ -164,14 +165,14 @@ export default function TestImport() {
           <CardContent className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="md:col-span-2 space-y-2"><Label>Test name</Label><Input value={meta.name} onChange={e=>setMeta({...meta, name:e.target.value})} placeholder="Algebra 1A Growth Test" data-testid="ti-name" /></div>
             <div className="md:col-span-2 space-y-2">
-              <Label>Course</Label>
-              <Select value={meta.course_id} onValueChange={v=>setMeta({...meta, course_id:v})}>
-                <SelectTrigger data-testid="ti-course"><SelectValue placeholder="Choose course" /></SelectTrigger>
-                <SelectContent className="max-h-72">
-                  {courses.map(c => <SelectItem key={c.id} value={c.id}>{c.title}{c.code ? ` · ${c.code}` : ""}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">For multi-course tests, create the test on the Tests page instead — this wizard links to a single course.</p>
+              <Label>Courses</Label>
+              <CourseMultiSelect
+                courses={courses}
+                value={meta.course_ids}
+                onChange={(ids) => setMeta({ ...meta, course_ids: ids })}
+                testid="ti-courses"
+              />
+              <p className="text-xs text-muted-foreground">Select one or more courses. The test will apply to every section of every selected course.</p>
             </div>
             <div className="md:col-span-2 rounded-md border border-border p-3 space-y-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">BOC window — beginning of course</div>
@@ -188,7 +189,7 @@ export default function TestImport() {
               </div>
             </div>
             <div className="md:col-span-2 flex justify-end">
-              <Button onClick={()=>setStep(2)} disabled={!meta.name || !meta.course_id} data-testid="ti-next-1">Continue <ChevronRight className="h-4 w-4" /></Button>
+              <Button onClick={()=>setStep(2)} disabled={!meta.name || meta.course_ids.length === 0} data-testid="ti-next-1">Continue <ChevronRight className="h-4 w-4" /></Button>
             </div>
           </CardContent>
         </Card>

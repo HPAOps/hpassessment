@@ -7,10 +7,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Switch } from "@/components/ui/switch";
-import { Plus, Eye, Pencil, Trash2, Check, ChevronDown, X } from "lucide-react";
+import { Plus, Eye, Pencil, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   listCourses, listTests, createTest, updateTest, deleteTest,
@@ -18,7 +16,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { CourseMultiSelect } from "@/components/common/CourseMultiSelect";
 
 export default function Tests() {
   const { staff } = useAuth();
@@ -201,125 +199,6 @@ function fmtWindow(open, close) {
   return <>{open || "—"} → {close || "—"}</>;
 }
 
-// Multi-select for courses, deduplicates by title+code so the dropdown shows
-// one row per unique course label (handles IC's per-year course duplicates).
-// Selecting a label links the test to ALL course IDs sharing that label.
-function CourseMultiSelect({ courses, value, onChange }) {
-  const [open, setOpen] = useState(false);
-
-  // Group courses by "title|code" so duplicates collapse into one selectable item
-  const groups = useMemo(() => {
-    const m = new Map();
-    for (const c of courses) {
-      const key = `${(c.title || "").trim()}|${(c.code || "").trim()}`;
-      if (!m.has(key)) m.set(key, { key, title: c.title, code: c.code, ids: [] });
-      m.get(key).ids.push(c.id);
-    }
-    return [...m.values()].sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-  }, [courses]);
-
-  const valueSet = useMemo(() => new Set(value), [value]);
-
-  // A group is "selected" if all its ids are in value
-  const isGroupSelected = (g) => g.ids.every(id => valueSet.has(id));
-  const isGroupPartial  = (g) => g.ids.some(id => valueSet.has(id)) && !isGroupSelected(g);
-
-  function toggleGroup(g) {
-    if (isGroupSelected(g)) {
-      onChange(value.filter(id => !g.ids.includes(id)));
-    } else {
-      // add any missing ids
-      const next = new Set(value);
-      g.ids.forEach(id => next.add(id));
-      onChange([...next]);
-    }
-  }
-
-  function removeGroup(g) {
-    onChange(value.filter(id => !g.ids.includes(id)));
-  }
-
-  const selectedGroups = groups.filter(isGroupSelected);
-
-  return (
-    <div className="space-y-2">
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            role="combobox"
-            aria-expanded={open}
-            className="w-full justify-between font-normal"
-            data-testid="new-test-courses"
-          >
-            <span className="text-sm">
-              {selectedGroups.length === 0
-                ? <span className="text-muted-foreground">Choose one or more courses</span>
-                : `${selectedGroups.length} course${selectedGroups.length === 1 ? "" : "s"} selected`}
-            </span>
-            <ChevronDown className="h-4 w-4 opacity-50" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-          <Command>
-            <CommandInput placeholder="Search courses…" />
-            <CommandList>
-              <CommandEmpty>No courses found.</CommandEmpty>
-              <CommandGroup>
-                {groups.map(g => {
-                  const selected = isGroupSelected(g);
-                  const partial = isGroupPartial(g);
-                  return (
-                    <CommandItem
-                      key={g.key}
-                      onSelect={() => toggleGroup(g)}
-                      className="cursor-pointer"
-                      data-testid={`course-option-${g.code || g.title}`}
-                    >
-                      <div className={cn(
-                        "mr-2 h-4 w-4 rounded border flex items-center justify-center",
-                        selected ? "bg-primary border-primary text-primary-foreground"
-                                 : partial ? "bg-primary/40 border-primary"
-                                           : "border-input"
-                      )}>
-                        {selected && <Check className="h-3 w-3" />}
-                      </div>
-                      <span className="flex-1">{g.title}</span>
-                      {g.code && <span className="text-xs text-muted-foreground ml-2">{g.code}</span>}
-                      {g.ids.length > 1 && (
-                        <span className="text-xs text-muted-foreground ml-2">({g.ids.length}×)</span>
-                      )}
-                    </CommandItem>
-                  );
-                })}
-              </CommandGroup>
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-
-      {selectedGroups.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {selectedGroups.map(g => (
-            <Badge key={g.key} variant="secondary" className="gap-1 pl-2 pr-1">
-              {g.title}
-              <button
-                type="button"
-                onClick={() => removeGroup(g)}
-                className="ml-1 rounded hover:bg-muted-foreground/20 p-0.5"
-                aria-label={`Remove ${g.title}`}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </Badge>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function NewTestDialog({ courses, sectionsByCourse, schoolYears, onSubmit }) {
   const [name, setName] = useState("");
   const [course_ids, setCourseIds] = useState([]);
@@ -363,7 +242,7 @@ function NewTestDialog({ courses, sectionsByCourse, schoolYears, onSubmit }) {
         </div>
         <div className="space-y-2">
           <Label>Courses</Label>
-          <CourseMultiSelect courses={courses} value={course_ids} onChange={setCourseIds} />
+          <CourseMultiSelect courses={courses} value={course_ids} onChange={setCourseIds} testid="new-test-courses" />
           {course_ids.length > 0 && (
             <p className="text-xs text-muted-foreground" data-testid="section-preview">
               Will apply to <strong>{totalSections}</strong> section{totalSections === 1 ? "" : "s"} across the selected courses.
