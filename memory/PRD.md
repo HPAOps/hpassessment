@@ -38,6 +38,23 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   with the pre-assigned role/campus/teacher mapping.
 - Break-glass email/password login retained for emergencies.
 
+## Phase C — OneRoster REST API sync (in progress 2026-02)
+
+- Pivoted from SFTP to OneRoster v1.2 REST API after Infinite Campus
+  provided OAuth 2.0 client_credentials rather than SFTP access.
+- Supabase Edge Function `oneroster-api-sync` (Deno) fetches orgs,
+  academicSessions, courses, classes, users, enrollments; upserts into
+  operational tables; records a `sync_runs` row.
+- `app_secrets` slots: `oneroster_api_client_id`, `oneroster_api_client_secret`,
+  `oneroster_api_token_url`, `oneroster_api_base_url`. Service-role-only
+  read via `secrets_read_for_service(text)`.
+- `pg_cron` schedule: 08:00 UTC (1 AM AZ) + 03:00 UTC (8 PM AZ). Stored
+  Edge Function URL + service key in `app_secrets` so nothing is hardcoded.
+- Frontend: "Run sync now" button on the OneRoster card (super_admin only)
+  with live toast + row-count summary.
+- **Status**: code complete, pending user deployment of the Edge Function
+  + SQL scripts + provisioning of the (rotated) client secret.
+
 ## Phase B — Secrets vault + Integrations admin (completed 2026-02)
 
 - `public.app_secrets` table (super-admin RLS), pre-seeded with OneRoster
@@ -76,12 +93,8 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
 
 ## Backlog (v2)
 
-- **P0**: Phase C — Infinite Campus OneRoster SFTP integration.
-  Supabase Edge Function that reads SFTP creds from `app_secrets`, pulls
-  the OneRoster ZIP on a cron schedule, and runs the existing import logic
-  server-side. Replaces manual ZIP upload.
+- **P0**: PWA service worker + manifest for Chromebook kiosk install.
 - **P1**: Question booklet auto-splitter (PDF/Docx → q01.png … qNN.png).
-- **P1**: PWA service worker + manifest for Chromebook kiosk install.
 - **P2**: CSV / PDF report exports.
 - **P2**: Standards-tagged item analysis dashboard.
 - **P2**: Student accommodations (TTS, larger text, extra time per IEP).

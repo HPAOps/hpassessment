@@ -27,7 +27,7 @@ export default function AdminDashboard() {
     const role = staff?.role;
     if (role !== "super_admin" && role !== "district_admin") return;
     listSyncRunsLatest()
-      .then(runs => setRosterSync(runs.find(r => r.category === "oneroster_sftp") || null))
+      .then(runs => setRosterSync(runs.find(r => r.category === "oneroster_api") || null))
       .catch(() => setRosterSync(null));
   }, [staff]);
 

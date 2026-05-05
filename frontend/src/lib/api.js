@@ -688,16 +688,16 @@ export async function uploadQuestionImage(file) {
 // secrets exist in the DB.
 export const INTEGRATION_CATALOG = [
   {
-    category: "oneroster_sftp",
-    name: "Infinite Campus — OneRoster SFTP",
-    description: "Scheduled nightly roster pull from Infinite Campus.",
+    category: "oneroster_api",
+    name: "Infinite Campus — OneRoster REST API",
+    description: "OAuth 2.0 client_credentials pull of rosters, classes, and enrollments on a nightly + evening schedule.",
     fields: [
-      { key: "oneroster_sftp_host",        label: "Host",        type: "text",     placeholder: "sftp.infinitecampus.com" },
-      { key: "oneroster_sftp_port",        label: "Port",        type: "text",     placeholder: "22" },
-      { key: "oneroster_sftp_username",    label: "Username",    type: "text" },
-      { key: "oneroster_sftp_password",    label: "Password",    type: "password", secret: true },
-      { key: "oneroster_sftp_remote_path", label: "Remote path", type: "text",     placeholder: "/outbound/oneroster.zip" },
+      { key: "oneroster_api_client_id",     label: "Client ID",     type: "text" },
+      { key: "oneroster_api_client_secret", label: "Client secret", type: "password", secret: true },
+      { key: "oneroster_api_token_url",     label: "Token URL",     type: "text",     placeholder: "https://…/campus/oauth2/token?appName=hpa" },
+      { key: "oneroster_api_base_url",      label: "Base URL",      type: "text",     placeholder: "https://…/campus/api/oneroster/v1p2/…/ims/oneroster" },
     ],
+    canRunNow: true,
   },
   {
     category: "email",
@@ -811,4 +811,31 @@ export async function listSyncRunsRecent({ category = null, limit = 20 } = {}) {
   });
   if (error) throw error;
   return data || [];
+}
+
+// Trigger the OneRoster REST API Edge Function manually. Super-admin only —
+// server-side checks will reject non-super callers, we also optimistically
+// gate the UI button. Returns { run_id, status, row_counts, warnings } on
+// success, or throws with the server's error message on failure.
+export async function invokeOneRosterApiSync() {
+  if (isDemoMode) {
+    return { ok: true, status: "success", row_counts: { students: 0, teachers: 0 }, simulated: true };
+  }
+  const { data, error } = await supabase.functions.invoke("oneroster-api-sync", {
+    body: { source: "manual" },
+  });
+  if (error) {
+    // supabase.functions.invoke wraps the body in `error.context` when the
+    // function returns a non-2xx — surface that message.
+    let msg = error.message || "Sync failed";
+    try {
+      const ctx = await error.context?.json?.();
+      if (ctx?.error) msg = ctx.error;
+    } catch { /* noop */ }
+    throw new Error(msg);
+  }
+  if (data && data.ok === false) {
+    throw new Error(data.error || "Sync failed");
+  }
+  return data;
 }

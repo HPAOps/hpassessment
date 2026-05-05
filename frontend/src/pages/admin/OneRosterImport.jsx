@@ -50,7 +50,7 @@ export default function OneRosterImport() {
         status: parsed.errors.length === 0 ? "completed" : "completed_with_errors",
       }, staff?.email);
       await recordSyncRun({
-        category: "oneroster_sftp",
+        category: "oneroster_api",
         source: "manual_zip",
         status: parsed.errors.length === 0 ? "success" : "partial",
         row_counts: mapping.counts,
@@ -64,7 +64,7 @@ export default function OneRosterImport() {
       if (fileInput.current) fileInput.current.value = "";
     } catch (err) {
       await recordSyncRun({
-        category: "oneroster_sftp",
+        category: "oneroster_api",
         source: "manual_zip",
         status: "failed",
         row_counts: {},

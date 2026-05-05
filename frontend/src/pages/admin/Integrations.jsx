@@ -11,12 +11,13 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { CheckCircle2, AlertCircle, Plug, ShieldCheck, Users, KeyRound, RotateCcw, Trash2, Plus, Lock, Clock, XCircle, Activity } from "lucide-react";
+import { CheckCircle2, AlertCircle, Plug, ShieldCheck, Users, KeyRound, RotateCcw, Trash2, Plus, Lock, Clock, XCircle, Activity, RefreshCw, Loader2 } from "lucide-react";
 import {
   listSecrets, setSecret, clearSecret, INTEGRATION_CATALOG,
   listWhitelist, upsertWhitelist, deleteWhitelist,
   listCampuses, listTeachers,
   listSyncRunsLatest, listSyncRunsRecent,
+  invokeOneRosterApiSync,
 } from "@/lib/api";
 import { isDemoMode } from "@/lib/supabase";
 
@@ -119,12 +120,15 @@ function IntegrationList({ isSuper }) {
 
               <LastSyncRow run={lastRun} />
 
-              <div className="mt-4 flex gap-2">
+              <div className="mt-4 flex gap-2 flex-wrap">
                 <ConfigureIntegrationDialog integration={it} secrets={secrets} onDone={refresh} disabled={!isSuper}>
                   <Button size="sm" disabled={!isSuper} data-testid={`configure-${it.category}`}>
                     <KeyRound className="h-4 w-4" /> {status.anyConfigured ? "Rotate" : "Configure"}
                   </Button>
                 </ConfigureIntegrationDialog>
+                {it.canRunNow && status.configured && (
+                  <RunSyncNowButton category={it.category} isSuper={isSuper} onDone={refresh} />
+                )}
                 {status.anyConfigured && (
                   <Button size="sm" variant="outline" disabled={!isSuper}
                     onClick={async () => {
@@ -146,6 +150,39 @@ function IntegrationList({ isSuper }) {
 
     <RecentRunsTable runs={recentRuns} />
     </>
+  );
+}
+
+function RunSyncNowButton({ category, isSuper, onDone }) {
+  const [running, setRunning] = useState(false);
+  async function run() {
+    setRunning(true);
+    const loadingId = toast.loading("Running OneRoster sync…");
+    try {
+      if (category !== "oneroster_api") throw new Error("unsupported category");
+      const res = await invokeOneRosterApiSync();
+      const rc = res?.row_counts || {};
+      const summary = Object.entries(rc).slice(0, 4).map(([k, v]) => `${v} ${k}`).join(" · ");
+      toast.dismiss(loadingId);
+      if (res?.status === "partial") {
+        toast.warning(`Sync completed with warnings${summary ? ` — ${summary}` : ""}`);
+      } else {
+        toast.success(`Sync complete${summary ? ` — ${summary}` : ""}`);
+      }
+      onDone?.();
+    } catch (err) {
+      toast.dismiss(loadingId);
+      toast.error(err.message || "Sync failed");
+    } finally {
+      setRunning(false);
+    }
+  }
+  return (
+    <Button size="sm" variant="outline" disabled={!isSuper || running}
+      onClick={run} data-testid={`run-sync-${category}`}>
+      {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+      {running ? "Running…" : "Run sync now"}
+    </Button>
   );
 }
 
