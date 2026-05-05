@@ -175,6 +175,13 @@ export async function listCourseSections() {
   return data || [];
 }
 
+export async function listSchoolYears() {
+  if (isDemoMode) return store().school_years;
+  const { data, error } = await supabase.from("school_years").select("*").order("start_date", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
 export async function getSettings() {
   if (isDemoMode) return store().app_settings;
   const { data, error } = await supabase.from("app_settings").select("*").eq("id", 1).maybeSingle();

@@ -14,7 +14,7 @@ import { Plus, Eye, Pencil, Trash2, Check, ChevronDown, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   listCourses, listTests, createTest, updateTest, deleteTest,
-  listCourseSections, listTestCourses,
+  listCourseSections, listTestCourses, listSchoolYears,
 } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -26,13 +26,14 @@ export default function Tests() {
   const [courses, setCourses] = useState([]);
   const [sections, setSections] = useState([]);
   const [testCourses, setTestCourses] = useState([]);
+  const [schoolYears, setSchoolYears] = useState([]);
   const [open, setOpen] = useState(false);
 
   async function refresh() {
-    const [t, c, s, tc] = await Promise.all([
-      listTests(), listCourses(), listCourseSections(), listTestCourses(),
+    const [t, c, s, tc, sy] = await Promise.all([
+      listTests(), listCourses(), listCourseSections(), listTestCourses(), listSchoolYears(),
     ]);
-    setTests(t); setCourses(c); setSections(s); setTestCourses(tc);
+    setTests(t); setCourses(c); setSections(s); setTestCourses(tc); setSchoolYears(sy);
   }
   useEffect(() => { refresh(); }, []);
 
@@ -64,10 +65,15 @@ export default function Tests() {
   );
 
   async function onCreate(payload) {
-    await createTest(payload, staff?.email);
-    toast.success("Test created");
-    setOpen(false);
-    refresh();
+    try {
+      await createTest(payload, staff?.email);
+      toast.success("Test created");
+      setOpen(false);
+      refresh();
+    } catch (e) {
+      const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
+      toast.error("Could not create test: " + msg);
+    }
   }
 
   async function togglePublish(t) {
@@ -99,7 +105,7 @@ export default function Tests() {
             <DialogTrigger asChild>
               <Button data-testid="new-test-btn"><Plus className="h-4 w-4" /> New test</Button>
             </DialogTrigger>
-            <NewTestDialog courses={courses} sectionsByCourse={sectionsByCourse} onSubmit={onCreate} />
+            <NewTestDialog courses={courses} sectionsByCourse={sectionsByCourse} schoolYears={schoolYears} onSubmit={onCreate} />
           </Dialog>
         }
       />
@@ -314,14 +320,25 @@ function CourseMultiSelect({ courses, value, onChange }) {
   );
 }
 
-function NewTestDialog({ courses, sectionsByCourse, onSubmit }) {
+function NewTestDialog({ courses, sectionsByCourse, schoolYears, onSubmit }) {
   const [name, setName] = useState("");
   const [course_ids, setCourseIds] = useState([]);
-  const [school_year_id] = useState("sy-2627");
   const [boc_opens_at, setBocOpens] = useState("");
   const [boc_closes_at, setBocCloses] = useState("");
   const [eoc_opens_at, setEocOpens] = useState("");
   const [eoc_closes_at, setEocCloses] = useState("");
+
+  // Auto-pick the school year that contains today, falling back to the most
+  // recently started one. school_year_id is required by the schema.
+  const school_year_id = useMemo(() => {
+    if (!schoolYears?.length) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    const current = schoolYears.find(sy =>
+      (!sy.start_date || sy.start_date <= today) &&
+      (!sy.end_date   || sy.end_date   >= today)
+    );
+    return (current || schoolYears[0]).id;
+  }, [schoolYears]);
 
   const totalSections = course_ids.reduce(
     (sum, cid) => sum + (sectionsByCourse?.get(cid)?.length || 0), 0
@@ -350,6 +367,11 @@ function NewTestDialog({ courses, sectionsByCourse, onSubmit }) {
           {course_ids.length > 0 && (
             <p className="text-xs text-muted-foreground" data-testid="section-preview">
               Will apply to <strong>{totalSections}</strong> section{totalSections === 1 ? "" : "s"} across the selected courses.
+            </p>
+          )}
+          {!schoolYears?.length && (
+            <p className="text-xs text-[hsl(var(--destructive))]">
+              No school year synced yet. Run the OneRoster sync first or the test will fail to save.
             </p>
           )}
         </div>
