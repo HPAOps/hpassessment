@@ -21,9 +21,13 @@ export default function Users() {
     const cId = staff?.role === "campus_admin" ? staff.campus_id : null;
     listStudents(cId).then(setStudents);
     listTeachers(cId).then(setTeachers);
-    listWhitelist().then(rows => setStaffList(
-      cId ? (rows || []).filter(r => !r.campus_id || r.campus_id === cId) : (rows || [])
-    )).catch(() => setStaffList([]));
+    listWhitelist().then(rows => {
+      // Staff = administrators only. Teachers have their own tab.
+      const onlyStaff = (rows || []).filter(r => r.role !== "teacher");
+      setStaffList(
+        cId ? onlyStaff.filter(r => !r.campus_id || r.campus_id === cId) : onlyStaff
+      );
+    }).catch(() => setStaffList([]));
   }, [staff]);
 
   const ff = (s) => s.toLowerCase().includes(filter.toLowerCase());

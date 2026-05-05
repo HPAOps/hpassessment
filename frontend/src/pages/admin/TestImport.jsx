@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import JSZip from "jszip";
 import Papa from "papaparse";
-import { listCourses, listTests, createTest, recordTestImport, listTestImports, upsertQuestion, uploadQuestionImage } from "@/lib/api";
+import { listCourses, listTests, createTest, recordTestImport, listTestImports, upsertQuestion, uploadQuestionImage, listSchoolYears } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import { ChevronRight, Upload, AlertTriangle, CheckCircle2 } from "lucide-react";
@@ -19,10 +19,13 @@ export default function TestImport() {
   const [step, setStep] = useState(1);
   const [courses, setCourses] = useState([]);
   const [history, setHistory] = useState([]);
+  const [schoolYears, setSchoolYears] = useState([]);
 
   const [meta, setMeta] = useState({
-    name: "", course_id: "", test_type: "BOC", school_year_id: "sy-2627",
-    scope: "district", opens_at: "", closes_at: "",
+    name: "", course_id: "",
+    boc_opens_at: "", boc_closes_at: "",
+    eoc_opens_at: "", eoc_closes_at: "",
+    scope: "district",
   });
   const [bookletFile, setBookletFile] = useState(null);
   const [keyFile, setKeyFile] = useState(null);
@@ -32,6 +35,7 @@ export default function TestImport() {
   useEffect(() => {
     listCourses().then(setCourses);
     listTestImports().then(setHistory);
+    listSchoolYears().then(setSchoolYears).catch(() => setSchoolYears([]));
   }, []);
 
   async function parseAnswerKey(file) {
@@ -95,32 +99,52 @@ export default function TestImport() {
   }
 
   async function commit() {
-    const test = await createTest({
-      ...meta,
-      question_count: keyEntries.length,
-      is_published: false,
-    }, staff?.email);
-    for (const { qn, ans } of keyEntries) {
-      const id = `${test.id}-q${qn}`;
-      await upsertQuestion({
-        id, test_id: test.id, question_number: qn,
-        correct_answer: ans, image_url: imageMap[qn] || `https://picsum.photos/seed/${id}/1000/640`,
-        is_active: true,
+    try {
+      // Pick the school year that contains today, fallback to most recent
+      const today = new Date().toISOString().slice(0, 10);
+      const sy = schoolYears.find(s =>
+        (!s.start_date || s.start_date <= today) &&
+        (!s.end_date   || s.end_date   >= today)
+      ) || schoolYears[0];
+
+      const test = await createTest({
+        name: meta.name,
+        course_ids: [meta.course_id],
+        school_year_id: sy?.id || null,
+        scope: meta.scope,
+        boc_opens_at: meta.boc_opens_at || null,
+        boc_closes_at: meta.boc_closes_at || null,
+        eoc_opens_at: meta.eoc_opens_at || null,
+        eoc_closes_at: meta.eoc_closes_at || null,
+        question_count: keyEntries.length,
+        is_published: false,
       }, staff?.email);
+      for (const { qn, ans } of keyEntries) {
+        const id = `${test.id}-q${qn}`;
+        await upsertQuestion({
+          id, test_id: test.id, question_number: qn,
+          correct_answer: ans, image_url: imageMap[qn] || `https://picsum.photos/seed/${id}/1000/640`,
+          is_active: true,
+        }, staff?.email);
+      }
+      await recordTestImport({
+        course_id: meta.course_id,
+        test_id: test.id,
+        booklet_filename: bookletFile?.name,
+        answer_key_filename: keyFile?.name,
+        detected_questions: keyEntries.length,
+        uploaded_images: Object.keys(imageMap).length,
+        status: "completed",
+      }, staff?.email);
+      toast.success("Test imported! Review and publish from Tests.");
+      setStep(1);
+      setMeta({ name:"", course_id:"", boc_opens_at:"", boc_closes_at:"", eoc_opens_at:"", eoc_closes_at:"", scope:"district" });
+      setBookletFile(null); setKeyFile(null); setKeyEntries([]); setImageMap({});
+      setHistory(await listTestImports());
+    } catch (e) {
+      const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
+      toast.error("Import failed: " + msg);
     }
-    await recordTestImport({
-      course_id: meta.course_id,
-      test_id: test.id,
-      booklet_filename: bookletFile?.name,
-      answer_key_filename: keyFile?.name,
-      detected_questions: keyEntries.length,
-      uploaded_images: Object.keys(imageMap).length,
-      status: "completed",
-    }, staff?.email);
-    toast.success("Test imported! Review and publish from Tests.");
-    setStep(1); setMeta({ name:"", course_id:"", test_type:"BOC", school_year_id:"sy-2627", scope:"district", opens_at:"", closes_at:"" });
-    setBookletFile(null); setKeyFile(null); setKeyEntries([]); setImageMap({});
-    setHistory(await listTestImports());
   }
 
   const missing = keyEntries.filter(e => !imageMap[e.qn]).length;
@@ -138,23 +162,31 @@ export default function TestImport() {
       {step === 1 && (
         <Card>
           <CardContent className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2 space-y-2"><Label>Test name</Label><Input value={meta.name} onChange={e=>setMeta({...meta, name:e.target.value})} placeholder="Algebra 1A BOC" data-testid="ti-name" /></div>
-            <div className="space-y-2">
+            <div className="md:col-span-2 space-y-2"><Label>Test name</Label><Input value={meta.name} onChange={e=>setMeta({...meta, name:e.target.value})} placeholder="Algebra 1A Growth Test" data-testid="ti-name" /></div>
+            <div className="md:col-span-2 space-y-2">
               <Label>Course</Label>
               <Select value={meta.course_id} onValueChange={v=>setMeta({...meta, course_id:v})}>
                 <SelectTrigger data-testid="ti-course"><SelectValue placeholder="Choose course" /></SelectTrigger>
-                <SelectContent>{courses.map(c => <SelectItem key={c.id} value={c.id}>{c.title}</SelectItem>)}</SelectContent>
+                <SelectContent className="max-h-72">
+                  {courses.map(c => <SelectItem key={c.id} value={c.id}>{c.title}{c.code ? ` · ${c.code}` : ""}</SelectItem>)}
+                </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">For multi-course tests, create the test on the Tests page instead — this wizard links to a single course.</p>
             </div>
-            <div className="space-y-2">
-              <Label>Type</Label>
-              <Select value={meta.test_type} onValueChange={v=>setMeta({...meta, test_type:v})}>
-                <SelectTrigger data-testid="ti-type"><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value="BOC">BOC</SelectItem><SelectItem value="EOC">EOC</SelectItem></SelectContent>
-              </Select>
+            <div className="md:col-span-2 rounded-md border border-border p-3 space-y-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">BOC window — beginning of course</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5"><Label className="text-xs">Opens</Label><Input type="date" value={meta.boc_opens_at} onChange={e=>setMeta({...meta, boc_opens_at:e.target.value})} data-testid="ti-boc-opens" /></div>
+                <div className="space-y-1.5"><Label className="text-xs">Closes</Label><Input type="date" value={meta.boc_closes_at} onChange={e=>setMeta({...meta, boc_closes_at:e.target.value})} data-testid="ti-boc-closes" /></div>
+              </div>
             </div>
-            <div className="space-y-2"><Label>Opens</Label><Input type="date" value={meta.opens_at} onChange={e=>setMeta({...meta, opens_at:e.target.value})} /></div>
-            <div className="space-y-2"><Label>Closes</Label><Input type="date" value={meta.closes_at} onChange={e=>setMeta({...meta, closes_at:e.target.value})} /></div>
+            <div className="md:col-span-2 rounded-md border border-border p-3 space-y-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">EOC window — end of course</div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5"><Label className="text-xs">Opens</Label><Input type="date" value={meta.eoc_opens_at} onChange={e=>setMeta({...meta, eoc_opens_at:e.target.value})} data-testid="ti-eoc-opens" /></div>
+                <div className="space-y-1.5"><Label className="text-xs">Closes</Label><Input type="date" value={meta.eoc_closes_at} onChange={e=>setMeta({...meta, eoc_closes_at:e.target.value})} data-testid="ti-eoc-closes" /></div>
+              </div>
+            </div>
             <div className="md:col-span-2 flex justify-end">
               <Button onClick={()=>setStep(2)} disabled={!meta.name || !meta.course_id} data-testid="ti-next-1">Continue <ChevronRight className="h-4 w-4" /></Button>
             </div>
