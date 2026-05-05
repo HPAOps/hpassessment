@@ -16,7 +16,10 @@ export const supabase = (!SUPABASE_URL || !SUPABASE_ANON_KEY)
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: false,
+        // Required for Microsoft OAuth callback — parses the #access_token=…
+        // fragment into a live session when /staff/oauth-callback mounts.
+        detectSessionInUrl: true,
+        flowType: "implicit",
       },
     });
 
