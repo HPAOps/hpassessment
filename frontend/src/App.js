@@ -27,6 +27,7 @@ import SettingsPage from "@/pages/admin/Settings";
 import Campuses from "@/pages/admin/Campuses";
 import Users from "@/pages/admin/Users";
 import TestPreview from "@/pages/admin/TestPreview";
+import Integrations from "@/pages/admin/Integrations";
 
 function App() {
   return (
@@ -57,6 +58,7 @@ function App() {
             <Route path="/admin/reports" element={<RequireStaff><Reports /></RequireStaff>} />
             <Route path="/admin/audit" element={<RequireStaff roles={["super_admin","district_admin"]}><AuditLogs /></RequireStaff>} />
             <Route path="/admin/settings" element={<RequireStaff roles={["super_admin"]}><SettingsPage /></RequireStaff>} />
+            <Route path="/admin/integrations" element={<RequireStaff roles={["super_admin","district_admin"]}><Integrations /></RequireStaff>} />
             <Route path="/admin/campuses" element={<RequireStaff roles={["super_admin","district_admin"]}><Campuses /></RequireStaff>} />
             <Route path="/admin/users" element={<RequireStaff><Users /></RequireStaff>} />
 

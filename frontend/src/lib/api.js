@@ -679,3 +679,101 @@ export async function uploadQuestionImage(file) {
   const { data } = supabase.storage.from("question-images").getPublicUrl(path);
   return data.publicUrl;
 }
+
+// ---------------------------------------------------------------------------
+// INTEGRATIONS / SECRETS / WHITELIST
+// ---------------------------------------------------------------------------
+
+// Front-end-known integration slots, used to render the UI even before any
+// secrets exist in the DB.
+export const INTEGRATION_CATALOG = [
+  {
+    category: "oneroster_sftp",
+    name: "Infinite Campus — OneRoster SFTP",
+    description: "Scheduled nightly roster pull from Infinite Campus.",
+    fields: [
+      { key: "oneroster_sftp_host",        label: "Host",        type: "text",     placeholder: "sftp.infinitecampus.com" },
+      { key: "oneroster_sftp_port",        label: "Port",        type: "text",     placeholder: "22" },
+      { key: "oneroster_sftp_username",    label: "Username",    type: "text" },
+      { key: "oneroster_sftp_password",    label: "Password",    type: "password", secret: true },
+      { key: "oneroster_sftp_remote_path", label: "Remote path", type: "text",     placeholder: "/outbound/oneroster.zip" },
+    ],
+  },
+  {
+    category: "email",
+    name: "Email — SendGrid",
+    description: "Used for staff invitation emails (v2).",
+    fields: [
+      { key: "sendgrid_api_key",    label: "API key",   type: "password", secret: true },
+      { key: "sendgrid_from_email", label: "From email", type: "text",     placeholder: "assessments@hpa.org" },
+    ],
+  },
+];
+
+export async function listSecrets() {
+  if (isDemoMode) {
+    // Return the catalog fields as "not configured"
+    return INTEGRATION_CATALOG.flatMap(it => it.fields.map(f => ({
+      name: f.key, category: it.category, description: f.label,
+      configured: false, updated_at: null, updated_by_email: null,
+    })));
+  }
+  const { data, error } = await supabase.rpc("secrets_list");
+  if (error) throw error;
+  return data || [];
+}
+
+export async function setSecret(name, value, category, description) {
+  if (isDemoMode) return { ok: true };
+  const { error } = await supabase.rpc("secret_set", {
+    p_name: name, p_value: value || null,
+    p_category: category || null, p_description: description || null,
+  });
+  if (error) throw error;
+  return { ok: true };
+}
+
+export async function clearSecret(name) {
+  if (isDemoMode) return { ok: true };
+  const { error } = await supabase.rpc("secret_clear", { p_name: name });
+  if (error) throw error;
+  return { ok: true };
+}
+
+export async function deleteSecret(name) {
+  if (isDemoMode) return { ok: true };
+  const { error } = await supabase.rpc("secret_delete", { p_name: name });
+  if (error) throw error;
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// WHITELIST
+// ---------------------------------------------------------------------------
+
+export async function listWhitelist() {
+  if (isDemoMode) return [];
+  const { data, error } = await supabase.rpc("whitelist_list");
+  if (error) throw error;
+  return data || [];
+}
+
+export async function upsertWhitelist(entry) {
+  if (isDemoMode) return { ok: true };
+  const { error } = await supabase.rpc("whitelist_upsert", {
+    p_email: entry.email,
+    p_role: entry.role,
+    p_campus_id: entry.campus_id || null,
+    p_teacher_id: entry.teacher_id || null,
+    p_tenant_hint: entry.tenant_hint || null,
+  });
+  if (error) throw error;
+  return { ok: true };
+}
+
+export async function deleteWhitelist(email) {
+  if (isDemoMode) return { ok: true };
+  const { error } = await supabase.rpc("whitelist_delete", { p_email: email });
+  if (error) throw error;
+  return { ok: true };
+}
