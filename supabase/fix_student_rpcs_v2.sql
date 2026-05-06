@@ -156,13 +156,17 @@ begin
 
   v_new_secret := gen_random_uuid();
 
+  -- NOTE: there is no `responses` column on test_attempts; per-question
+  -- answers live in the separate `student_responses` table, populated by
+  -- save_response()/submit_attempt(). The earlier v2_simplifications.sql
+  -- mistakenly tried to insert a `responses` jsonb here, which 500'd the RPC.
   insert into public.test_attempts (
     student_id, test_id, course_section_id, phase,
-    status, question_order, responses, session_secret
+    status, question_order, session_secret
   )
   values (
     p_student_db_id, p_test_id, p_section_id, v_phase,
-    'in_progress', coalesce(v_question_ids, '{}'::uuid[]), '{}'::jsonb, v_new_secret
+    'in_progress', coalesce(v_question_ids, '{}'::uuid[]), v_new_secret
   )
   returning * into v_attempt;
 
