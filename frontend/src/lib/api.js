@@ -162,6 +162,106 @@ export async function listTests() {
   return data || [];
 }
 
+// ---------------------------------------------------------------------------
+// Sections (course sections) -- scoped by RLS
+// ---------------------------------------------------------------------------
+// listSectionsScoped() returns whatever sections the current user is allowed
+// to see (RLS does the filtering): teachers see only their assigned sections,
+// campus admins see only their campus, district/super admins see everything.
+// Each row includes joined course, campus, teacher names and an enrollment
+// count for the index page.
+export async function listSectionsScoped() {
+  if (isDemoMode) {
+    const s = store();
+    return (s.course_sections || []).map(cs => {
+      const course = (s.courses || []).find(c => c.id === cs.course_id);
+      const campus = (s.campuses || []).find(c => c.id === cs.campus_id);
+      const tcas = (s.teacher_class_assignments || []).filter(t => t.course_section_id === cs.id);
+      const teachers = tcas.map(t => (s.teachers || []).find(x => x.id === t.teacher_id)).filter(Boolean);
+      const enrollment_count = (s.student_enrollments || []).filter(e => e.course_section_id === cs.id).length;
+      return { ...cs, course, campus, teachers, enrollment_count };
+    });
+  }
+  const { data, error } = await supabase.from("course_sections").select(`
+    id, section_code, is_active,
+    course:courses(id, title, code),
+    campus:campuses(id, name),
+    assignments:teacher_class_assignments(teacher:teachers(id, first_name, last_name)),
+    enrollments:student_enrollments(count)
+  `).eq("is_active", true).order("section_code");
+  if (error) throw error;
+  return (data || []).map(row => ({
+    id: row.id,
+    section_code: row.section_code,
+    is_active: row.is_active,
+    course: row.course || null,
+    campus: row.campus || null,
+    teachers: (row.assignments || []).map(a => a.teacher).filter(Boolean),
+    enrollment_count: row.enrollments?.[0]?.count ?? 0,
+  }));
+}
+
+// getSectionDetail(id) returns one section with joined course/campus/teachers.
+// Throws (or returns null) if RLS blocks access.
+export async function getSectionDetail(sectionId) {
+  if (isDemoMode) {
+    const s = store();
+    const cs = (s.course_sections || []).find(c => c.id === sectionId);
+    if (!cs) return null;
+    const course = (s.courses || []).find(c => c.id === cs.course_id);
+    const campus = (s.campuses || []).find(c => c.id === cs.campus_id);
+    const tcas = (s.teacher_class_assignments || []).filter(t => t.course_section_id === cs.id);
+    const teachers = tcas.map(t => (s.teachers || []).find(x => x.id === t.teacher_id)).filter(Boolean);
+    return { ...cs, course, campus, teachers };
+  }
+  const { data, error } = await supabase.from("course_sections").select(`
+    id, section_code, is_active,
+    course:courses(id, title, code),
+    campus:campuses(id, name),
+    assignments:teacher_class_assignments(teacher:teachers(id, first_name, last_name))
+  `).eq("id", sectionId).maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  return {
+    id: data.id,
+    section_code: data.section_code,
+    is_active: data.is_active,
+    course: data.course || null,
+    campus: data.campus || null,
+    teachers: (data.assignments || []).map(a => a.teacher).filter(Boolean),
+  };
+}
+
+// getSectionRoster(sectionId) -> active students enrolled in this section,
+// joined with the student record. Returns [] if RLS blocks access.
+export async function getSectionRoster(sectionId) {
+  if (isDemoMode) {
+    const s = store();
+    return (s.student_enrollments || [])
+      .filter(e => e.course_section_id === sectionId)
+      .map(e => ({
+        enrollment_id: e.id,
+        status: e.status,
+        student: (s.students || []).find(x => x.id === e.student_id) || null,
+      }))
+      .filter(r => r.student)
+      .sort((a, b) => (a.student.last_name || "").localeCompare(b.student.last_name || ""));
+  }
+  const { data, error } = await supabase.from("student_enrollments").select(`
+    id, status,
+    student:students(id, first_name, last_name, student_id, grade_level, is_active)
+  `).eq("course_section_id", sectionId);
+  if (error) throw error;
+  return (data || [])
+    .filter(r => r.student && r.student.is_active !== false)
+    .map(r => ({ enrollment_id: r.id, status: r.status, student: r.student }))
+    .sort((a, b) => {
+      const A = (a.student.last_name || "") + (a.student.first_name || "");
+      const B = (b.student.last_name || "") + (b.student.first_name || "");
+      return A.localeCompare(B);
+    });
+}
+
 export async function listQuestionsForTest(testId) {
   if (isDemoMode) return store().questions.filter(q => q.test_id === testId);
   const { data, error } = await supabase.from("questions").select("*").eq("test_id", testId).order("question_number");

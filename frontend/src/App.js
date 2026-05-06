@@ -28,6 +28,8 @@ import Campuses from "@/pages/admin/Campuses";
 import Users from "@/pages/admin/Users";
 import TestPreview from "@/pages/admin/TestPreview";
 import Integrations from "@/pages/admin/Integrations";
+import Sections from "@/pages/admin/Sections";
+import SectionRoster from "@/pages/admin/SectionRoster";
 
 function App() {
   return (
@@ -61,6 +63,8 @@ function App() {
             <Route path="/admin/integrations" element={<RequireStaff roles={["super_admin","district_admin"]}><Integrations /></RequireStaff>} />
             <Route path="/admin/campuses" element={<RequireStaff roles={["super_admin","district_admin"]}><Campuses /></RequireStaff>} />
             <Route path="/admin/users" element={<RequireStaff><Users /></RequireStaff>} />
+            <Route path="/admin/sections" element={<RequireStaff><Sections /></RequireStaff>} />
+            <Route path="/admin/sections/:sectionId" element={<RequireStaff><SectionRoster /></RequireStaff>} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

@@ -92,6 +92,53 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
 - Verified end-to-end: super admin login → page loads → RPCs return data →
   Configure dialog opens → whitelist renders 7 existing rows.
 
+## Phase D — OneRoster reliability + Sections page (2026-02)
+
+- **v6 → v10 sync hardening** (`oneroster-api-sync` Edge Function):
+  - v6: chunked `upsert(...).select()` to kill PostgREST URL-length crash on
+    4000+ ids (replaces big `.in()` lookups).
+  - v7: per-reason drop counters (`*_missing_student`, `*_missing_section`,
+    `*_missing_both`) + permissive secondary-role fallback.
+  - v8: aides routed to `staff` (not `teachers`); enrollment-derived `school`
+    used as primary candidate to fix users whose `primaryOrg` is the
+    auto-generated district office.
+  - v9: multi-candidate campus resolution (enrollments → primary role org →
+    other roles → primaryOrg → orgs[]); rescue pass re-classifies users
+    referenced by `role=student` enrollments even if their primary role is
+    guardian/relative/empty.
+  - v10: process `tobedeleted` users with `is_active=false` so their
+    enrollments still link; deterministic `sync_runs.details.campus_resolution`
+    diagnostic dump (orphan sample, candidate sid frequency, status
+    breakdown).
+- **Campuses page accuracy fix** — `listStudents()` was capped at Supabase's
+  default 1000-row limit, silently truncating per-campus totals. Added
+  `getCampusCounts()` that uses per-campus `count: 'exact', head: true`
+  filtered to `is_active = true`. Counts now match Clever's source-of-truth.
+- **`teachers.oneroster_role`** column + reclassification SQL moved 18 aides
+  from `teachers` to `staff`.
+- **`question-images` storage bucket** SQL ready (snake_case policies, public
+  read for `anon` student flow).
+- **.docx image extraction** — added auto-numbered list mode to
+  `docxImages.js`. Word's `<w:numPr>` paragraph references are now detected
+  when literal "1)" markers don't exist in the text. Verified against the
+  Biology booklet (42 questions, 42 images, clean 1:1 mapping).
+
+## Phase E — Sections page (2026-02)
+
+- New `/admin/sections` index page and `/admin/sections/:id` roster page.
+- Visibility enforced by existing RLS:
+  - **super_admin** / **district_admin** — every section
+  - **campus_admin** — only sections at their campus
+  - **teacher** — only sections in their `teacher_class_assignments`
+- Index columns: course title + code, section code, campus, teacher(s),
+  enrollment count, "Roster →" link.
+- Roster columns (per the user's request): last name, first name, Student ID,
+  grade level. Filter active students only. Search by name or Student ID.
+- Nav: new top-level "Sections" item visible to all 4 staff roles.
+- Reuses RPC-free Supabase REST joins (`course_sections.select(courses,
+  campuses, teacher_class_assignments(teachers), student_enrollments(count))`)
+  so no new DB migrations needed.
+
 ## Implemented (v1) — completion date 2026-02
 
 - Student flow: ID login → course picker → teacher verify → test selector →

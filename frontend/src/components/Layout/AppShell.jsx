@@ -3,7 +3,7 @@ import { Link, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth, hasRole } from "@/contexts/AuthContext";
 import { HpaLogo } from "@/components/common/Logo";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, Building2, BookMarked, FileText, KeyRound, Upload, FolderUp, Image as ImageIcon, Settings as SettingsIcon, ScrollText, LogOut, Users as UsersIcon, GraduationCap, Menu, X, Plug } from "lucide-react";
+import { LayoutDashboard, Building2, BookMarked, FileText, KeyRound, Upload, FolderUp, Image as ImageIcon, Settings as SettingsIcon, ScrollText, LogOut, Users as UsersIcon, GraduationCap, Menu, X, Plug, Layers } from "lucide-react";
 import { isDemoMode } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
@@ -14,6 +14,7 @@ const NAV = [
   { label: "Answer Keys",         to: "/admin/answer-keys",    icon: KeyRound,        roles: ["super_admin","district_admin"] },
   { label: "Test Import",         to: "/admin/test-import",    icon: FolderUp,        roles: ["super_admin","district_admin"] },
   { label: "Reports",             to: "/admin/reports",        icon: BookMarked,      roles: ["super_admin","district_admin","campus_admin","teacher"] },
+  { label: "Sections",            to: "/admin/sections",       icon: Layers,          roles: ["super_admin","district_admin","campus_admin","teacher"] },
   { label: "Campuses",            to: "/admin/campuses",       icon: Building2,       roles: ["super_admin","district_admin"] },
   { label: "Users",               to: "/admin/users",          icon: UsersIcon,       roles: ["super_admin","district_admin","campus_admin"] },
   { label: "Audit Log",           to: "/admin/audit",          icon: ScrollText,      roles: ["super_admin","district_admin"] },
