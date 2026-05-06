@@ -261,6 +261,26 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   }));
   counts.classes = course_sections.length;
 
+  // Build helper maps so each user can be pinned to a SCHOOL org, not the
+  // district. OneRoster's `primaryOrg` for many students points to the
+  // auto-generated district office; that wouldn't match any campus in our
+  // table. Walk enrollments -> classes.school to derive each user's school.
+  const classToSchoolSid = new Map<string, string>();
+  for (const cl of (d.classes ?? [])) {
+    const sid = cl.school?.sourcedId
+      || (Array.isArray(cl.schools) ? cl.schools[0]?.sourcedId : null);
+    if (cl.sourcedId && sid) classToSchoolSid.set(cl.sourcedId, sid);
+  }
+  const userToSchoolSid = new Map<string, string>();
+  for (const e of (d.enrollments ?? [])) {
+    const userSid  = e.user?.sourcedId;
+    const classSid = e.class?.sourcedId;
+    if (!userSid || !classSid) continue;
+    if (userToSchoolSid.has(userSid)) continue;
+    const schoolSid = classToSchoolSid.get(classSid);
+    if (schoolSid) userToSchoolSid.set(userSid, schoolSid);
+  }
+
   const students: any[] = [];
   const teachers: any[] = [];
   const staff: any[] = [];
@@ -308,30 +328,37 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
       || (Array.isArray(u.orgs) ? u.orgs[0]?.sourcedId : null)
       || null;
 
+    // Prefer the school sourcedId we derived from the user's first enrollment
+    // because OneRoster's `primaryOrg` is sometimes the district auto-org.
+    const enrollOrgSourcedId = userToSchoolSid.get(u.sourcedId);
+    const effectiveOrgSourcedId = enrollOrgSourcedId || primaryOrgSourcedId;
+
     if (effectiveRoleStr === 'student') {
       students.push({
         oneroster_user_sourced_id: u.sourcedId,
         student_id: u.identifier || u.username || u.sourcedId,
         first_name: u.givenName, last_name: u.familyName,
         email: u.email, grade_level: parseInt(u.grades || u.grade || '9', 10) || null,
-        primary_org_sourced_id: primaryOrgSourcedId,
+        primary_org_sourced_id: effectiveOrgSourcedId,
         is_active: isUserActive,
       });
-    } else if (effectiveRoleStr === 'teacher' || effectiveRoleStr === 'aide') {
+    } else if (effectiveRoleStr === 'teacher') {
       teachers.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
-        primary_org_sourced_id: primaryOrgSourcedId,
-        oneroster_role: effectiveRoleStr,
+        primary_org_sourced_id: effectiveOrgSourcedId,
+        oneroster_role: 'teacher',
         is_active: isUserActive,
       });
     } else {
+      // Aides land here too (treated as non-instructional staff to match
+      // Clever's split). Skip pure parent/guardian/relative rows.
       if (skippableSet.has(effectiveRoleStr)) continue;
 
       staff.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
-        primary_org_sourced_id: primaryOrgSourcedId,
+        primary_org_sourced_id: effectiveOrgSourcedId,
         oneroster_role: effectiveRoleStr,
         title: u.title || null,
         is_active: isUserActive,
@@ -356,7 +383,9 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
         _or_user_sid:  userSid,
         _or_class_sid: classSid,
       });
-    } else if (role === 'teacher' || role === 'aide') {
+    } else if (role === 'teacher') {
+      // Aides intentionally excluded — they live in `staff` and don't teach
+      // classes from a verification-flow perspective.
       teacher_class_assignments.push({
         oneroster_enrollment_sourced_id: e.sourcedId,
         _or_user_sid:  userSid,
