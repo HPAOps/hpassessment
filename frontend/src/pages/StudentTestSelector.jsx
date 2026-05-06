@@ -8,6 +8,7 @@ import { ArrowLeft, Loader2, FileText, Lock } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { getStudentEnrollments, getOpenTestsForCourse, listStudentAttempts, findOrCreateAttempt } from "@/lib/api";
 import { EmptyState } from "@/components/common/EmptyState";
+import { toast } from "sonner";
 
 export default function StudentTestSelector() {
   const { enrollmentId } = useParams();
@@ -16,6 +17,7 @@ export default function StudentTestSelector() {
   const [item, setItem] = useState(null);
   const [tests, setTests] = useState(null);
   const [attempts, setAttempts] = useState([]);
+  const [starting, setStarting] = useState(null);
 
   useEffect(() => {
     if (!student) return;
@@ -33,8 +35,18 @@ export default function StudentTestSelector() {
   }, [student, enrollmentId]);
 
   async function startTest(t) {
-    const a = await findOrCreateAttempt(student.id, t.id, item.section.id);
-    nav(`/student/test/${a.id}`);
+    setStarting(t.id);
+    try {
+      const a = await findOrCreateAttempt(student.id, t.id, item.section.id);
+      nav(`/student/test/${a.id}`);
+    } catch (e) {
+      // Supabase errors come back as plain objects with `.message`/`.details`/
+      // `.hint`. Surface a useful string instead of letting the React error
+      // boundary blow up with `[object Object]`.
+      const msg = e?.message || e?.details || e?.hint || e?.error_description || JSON.stringify(e);
+      toast.error("Could not start the test: " + msg);
+      setStarting(null);
+    }
   }
 
   if (!item || tests === null) return <StudentShell><div className="flex-1 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div></StudentShell>;
