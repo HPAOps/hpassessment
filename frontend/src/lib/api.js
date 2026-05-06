@@ -7,12 +7,13 @@ import { supabase, isDemoMode } from "./supabase";
 import { scoreAttempt, computeGrowth, shuffleSeeded } from "./scoring";
 
 // ---------------------------------------------------------------------------
-// Direct-fetch RPC fallback. supabase-js@2.105.1 has a known bug where it
-// double-reads the response body of failed RPC calls, surfacing every error
-// (404 not found, RLS reject, raise exception, etc.) as the cryptic
-// `TypeError: Failed to execute 'text' on 'Response': body stream already read`.
-// We bypass it for hot-path student RPCs by calling /rest/v1/rpc/<name>
-// directly and parsing the JSON ourselves.
+// Direct-XHR RPC fallback. supabase-js@2.105.1 has a bug where it
+// double-reads the response body of failed RPC calls. PostHog (and other
+// instrumentation) ALSO reads bodies via patched window.fetch, racing any
+// fetch-based workaround and producing the cryptic
+//   TypeError: Failed to execute 'text' on 'Response': body stream already read
+//   TypeError: Failed to execute 'clone' on 'Response': Response body is already used
+// Using XMLHttpRequest instead of fetch dodges all fetch-level wrappers.
 // ---------------------------------------------------------------------------
 async function rpcDirect(fnName, args) {
   const SUPABASE_URL     = process.env.REACT_APP_SUPABASE_URL || "";
@@ -20,45 +21,45 @@ async function rpcDirect(fnName, args) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
     throw new Error("Supabase env vars not configured");
   }
-  const headers = {
-    "apikey": SUPABASE_ANON_KEY,
-    "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-  };
-  // If a real Supabase session exists (staff user), use that JWT — needed so
-  // server-side RLS can read the staff role. The student flow runs as anon.
+  // If a real Supabase staff session exists, use that JWT so RLS policies
+  // see the staff role. Student flows run as anon.
+  let authToken = SUPABASE_ANON_KEY;
   try {
     const { data: session } = await supabase.auth.getSession();
     const tok = session?.session?.access_token;
-    if (tok) headers["Authorization"] = `Bearer ${tok}`;
+    if (tok) authToken = tok;
   } catch { /* ignore */ }
 
-  const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fnName}`, {
-    method: "POST", headers, body: JSON.stringify(args ?? {}),
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${SUPABASE_URL}/rest/v1/rpc/${fnName}`, true);
+    xhr.setRequestHeader("apikey", SUPABASE_ANON_KEY);
+    xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.responseType = "text";
+    xhr.timeout = 30000;
+    xhr.onload = () => {
+      const text = xhr.responseText || "";
+      let body = null;
+      if (text) { try { body = JSON.parse(text); } catch { body = text; } }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(body);
+      const body_msg = (body && typeof body === "object" && (body.message || body.hint || body.details))
+        || (typeof body === "string" && body) || "";
+      const msg = body_msg
+        ? `${body_msg} (HTTP ${xhr.status})`
+        : `HTTP ${xhr.status} from ${fnName}`;
+      const err = new Error(msg);
+      err.code = body?.code;
+      err.details = body?.details;
+      err.hint = body?.hint;
+      err.status = xhr.status;
+      reject(err);
+    };
+    xhr.onerror   = () => reject(new Error(`Network error calling ${fnName}`));
+    xhr.ontimeout = () => reject(new Error(`Timed out calling ${fnName}`));
+    xhr.send(JSON.stringify(args ?? {}));
   });
-  // Defensive: clone before reading. Third-party fetch instrumentation
-  // (PostHog session recording, devtools) can race us to read the body
-  // and leave the original stream consumed, producing the cryptic
-  // "Failed to execute 'text' on 'Response': body stream already read".
-  const text = await resp.clone().text();
-  let body = null;
-  if (text) { try { body = JSON.parse(text); } catch { body = text; } }
-
-  if (!resp.ok) {
-    const body_msg = (body && typeof body === "object" && (body.message || body.hint || body.details))
-      || (typeof body === "string" && body) || "";
-    const msg = body_msg
-      ? `${body_msg} (HTTP ${resp.status})`
-      : `HTTP ${resp.status} from ${fnName}`;
-    const err = new Error(msg);
-    err.code = body?.code;
-    err.details = body?.details;
-    err.hint = body?.hint;
-    err.status = resp.status;
-    throw err;
-  }
-  return body;
 }
 
 const STORAGE_KEY = "hpa.demo.v2";

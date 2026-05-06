@@ -1,0 +1,62 @@
+{
+  "summary": "Iteration_7 live-Supabase E2E re-test of the student test-taking flow for Daania (300699). HEADLINE FIX VERIFIED: the 'body stream already read / Response body is already used' error is GONE after PostHog removal from index.html and rpcDirect() being rewritten to use XMLHttpRequest. window.posthog === undefined on load, zero fetch-instrumentation interference. HOWEVER the student still cannot open the Biology 1 EOC test: clicking the EOC tile fires two 401s against /rest/v1/rpc (likely get_student_attempt) and silently redirects back to /student/courses — the previous body-stream mask is gone so now the underlying 401 is the only symptom. Root cause is the SAME issue called out in iteration_6 action-item #2: StudentTestSelector navigates straight to /student/test/<existing-attempt-id> (75eb7eea-5d5c-4494-8dc4-576939580710) but the in-memory hpa.attemptSecrets cache for that attempt is empty in a fresh browser session, so get_student_attempt(p_session_secret: null) is rejected by RLS with 401. The SECOND remaining issue from iter_6 — duplicate enrollment rows causing React duplicate-key warnings on /student/courses — is also still present (86c495ba-… and d2cc8558-… UUIDs fire the warning repeatedly).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/rest/v1/rpc/get_student_attempt (inferred from timing + prior iteration + EOC navigation trigger)",
+        "issue": "Still returns 401 for in-progress attempt 75eb7eea-5d5c-4494-8dc4-576939580710 when the client has no cached session_secret. Two 401s logged back-to-back immediately after user clicks the EOC tile. StudentTest.jsx load handler presumably throws, triage catches, silently navigates back to /student/courses (no error toast rendered — regression in UX visibility).",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "StudentTestSelector.jsx / StudentTest.jsx",
+        "issue": "Clicking the Biology 1 EOC tile no longer body-stream-errors but instead silently redirects the user back to /student/courses with NO visible toast. From the user's perspective the test tile does nothing. Root cause: StudentTest calls getStudentAttempt which passes p_session_secret from localStorage['hpa.attemptSecrets'][attemptId]; for a pre-existing attempt this key is missing, server returns 401, the load catch-block navigates home. Either (a) always route the EOC tile through findOrCreateAttempt/start_or_get_attempt (which REturns + caches the session_secret) even when an in-progress attempt exists, or (b) expose the 401 as a toast with a 'Reset attempt' link for staff, or (c) make start_or_get_attempt idempotent so it returns the existing attempt row WITH its current session_secret instead of creating a new one.",
+        "selector": "[data-testid='test-pick-c3bdbef0-66e9-4e38-9b7b-0819910caab4-EOC']",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "StudentCoursePicker",
+        "issue": "Duplicate-key React warnings still fire on /student/courses for course UUIDs 86c495ba-0339-4e0c-b173-824dc5c128* and d2cc8558-d6e5-4aec-9560-6e804769f0*. Multiple identical course tiles render (e.g. Spanish 2B shows 3x, Geometry 1B shows 2x, Aerospace Engineering 2x). student_lookup / enrollments cache has duplicate rows per course (likely one row per section rather than one per course). Cosmetic today but will cause non-deterministic behavior once the course picker uses stateful keys.",
+        "selector": "[data-testid^='course-pick-']",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Student → Biology 1 EOC tile → /student/test/:attemptId",
+        "issue": "Navigation lands on /student/test/<id> briefly then immediately redirects to /student/courses because get_student_attempt returns 401. Blocked from reaching Q1, so saveResponse / next / prev / submit / /student/submitted/:id routes could NOT be exercised this iteration.",
+        "affected_selectors": ["[data-testid='test-pick-*-EOC']", "StudentTest question card"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "BLOCKING: fix the 401 on /rest/v1/rpc/get_student_attempt for in-progress attempts. Preferred fix: in StudentTestSelector (and/or StudentTest load), ALWAYS call findOrCreateAttempt/start_or_get_attempt(p_student_db_id, p_test_id, p_section_id) first; that RPC should be idempotent — if an in_progress attempt already exists it returns the SAME row AND its session_secret so the client can cache it. Current flow bypasses that RPC when an attempt id is already known, which is how the secret cache gets out of sync.",
+    "Make the StudentTest load handler surface get_student_attempt errors as a toast AND render the 'We couldn't load your test' error card instead of silently redirecting to /student/courses. The silent redirect masks the real failure from users and testers.",
+    "Investigate and fix duplicate enrollment rows on /student/courses (React duplicate-key warnings for 86c495ba-… and d2cc8558-…). Likely a JOIN cardinality issue in student_lookup / enrollments payload — needs a DISTINCT on course_id or one-row-per-course reshaping in lookupStudentById.",
+    "Staff flows (super@hpa.test, teacher@hpa.test, admin/sections, admin/tests, admin/campuses, admin/reports, admin/integrations) were NOT retested this iteration because the blocking student-side regression takes precedence. Please retest these after the 401 fix lands."
+  ],
+  "critical_code_review_comments": [
+    "rpcDirect() XHR rewrite is clean and the right call — it structurally immunizes the app from ANY fetch-level instrumentation (PostHog, Sentry, devtools, future SDK injection). Keep it.",
+    "PostHog removal is correct for FERPA and for removing the body-stream race. Document the decision in /app/README.md or PRIVACY.md so it is not reintroduced by a future analytics request without privacy review.",
+    "StudentTestSelector must NOT assume the client already has the session_secret for an existing attempt. A student can legitimately switch browsers / clear cookies / open in incognito. The session_secret cache should be a CONVENIENCE, not a requirement; start_or_get_attempt must always be called and always return the canonical secret for the current (student_db_id, test_id, section_id) triple.",
+    "StudentTest.jsx error handling: the try/catch around the load call should RENDER an error state, not navigate away. Silent navigate-on-error is the new failure mode and is WORSE for debugging than the old explicit toast was.",
+    "Duplicate course rows on /student/courses should be de-duplicated client-side AS A BELT-AND-SUSPENDERS even after the server-side fix lands — use a Set / Map keyed by course.id before rendering."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "body-stream regression 100% resolved; new (actually pre-existing) 401 on get_student_attempt blocks ~100% of in-progress attempt loads.",
+    "frontend": "P0-1 (no window.posthog, no console errors on landing): PASS. P0-2 (open EOC test and see Q1): FAIL. P0-3 / P0-4 (pick answers / navigate / submit): BLOCKED — never reached Q1."
+  },
+  "test_credentials": "Student 300699 (Daania Abdulbari) — verified ID input → course list → teacher verify → test selector work. Staff creds not retested this iteration.",
+  "seed_data_creation": "None. Used the existing in-progress attempt 75eb7eea-5d5c-4494-8dc4-576939580710 referenced in the review request.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Body-stream/PostHog issue is resolved — do not re-verify unless PostHog is re-added. Focus the next iteration on (a) EOC tile opening the test without 401, (b) pick A → Next → pick B → Prev → verify A persisted → Submit → /student/submitted/:id with score, (c) staff flows (super@hpa.test + teacher@hpa.test at /admin/sections + cross-page sanity on /admin/dashboard, /admin/tests Edit, /admin/campuses counts, /admin/users, /admin/reports, /admin/integrations). Daania's in-progress attempt id is 75eb7eea-5d5c-4494-8dc4-576939580710; if the main agent's fix is 'always call start_or_get_attempt first', this attempt should be returned with a freshly-readable session_secret rather than a new one being created.",
+  "rca of the issue": "Two compounding bugs were reported in iter_6: (1) body-stream/PostHog race, (2) 401 on get_student_attempt for in-progress attempts with no cached session_secret. Main agent fixed (1) correctly via PostHog removal + XHR rpcDirect. (2) was NOT fixed; the only visible change is the failure mode — instead of a cryptic body-stream toast, the page now silently redirects to /student/courses because StudentTest's error handler navigates away rather than rendering an error card. The fix is to always route through start_or_get_attempt (idempotent) from StudentTestSelector so the session_secret cache is authoritative for ANY (student, test, section) triple, and to change StudentTest's load-error path from navigate() to render-error-card + toast."
+}
