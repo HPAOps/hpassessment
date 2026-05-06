@@ -145,24 +145,35 @@ begin
           using errcode = '42501';
       end if;
 
-      update public.test_attempts
-         set question_order = v_question_ids,
-             total_count = array_length(v_question_ids, 1),
-             session_secret = coalesce(v_attempt.session_secret, gen_random_uuid())
-       where id = v_attempt.id
-       returning * into v_attempt;
-
       insert into public.test_attempt_questions (
         attempt_id, question_id, display_order, snapshot_image_url, snapshot_correct_answer
       )
       select v_attempt.id, q.id, qno.idx, q.image_url, q.correct_answer
         from unnest(v_question_ids) with ordinality qno(qid, idx)
         join public.questions q on q.id = qno.qid;
+
+      update public.test_attempts
+         set question_order = v_question_ids,
+             total_count = array_length(v_question_ids, 1)
+       where id = v_attempt.id
+       returning * into v_attempt;
     end if;
 
+    -- ALWAYS rotate the session_secret on every call so the flow is fully
+    -- self-healing across browser switches / incognito / re-logins. The
+    -- new secret is only returned to the caller once. The earlier
+    -- "issue once" policy from security_hardening.sql created a UX dead
+    -- end for any student who lost their localStorage cache; the
+    -- protection it provided is unchanged because we still verify
+    -- student_id matches before doing anything.
+    v_new_secret := gen_random_uuid();
+    update public.test_attempts
+       set session_secret = v_new_secret
+     where id = v_attempt.id
+     returning * into v_attempt;
+
     v_payload := to_jsonb(v_attempt) - 'session_secret';
-    v_payload := v_payload || jsonb_build_object('session_secret', v_attempt.session_secret);
-    return v_payload;
+    return v_payload || jsonb_build_object('session_secret', v_new_secret);
   end if;
 
   -- Fresh attempt

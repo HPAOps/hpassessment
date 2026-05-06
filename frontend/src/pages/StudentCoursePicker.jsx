@@ -15,7 +15,17 @@ export default function StudentCoursePicker() {
 
   useEffect(() => {
     if (!student) return;
-    getStudentEnrollments(student.id).then(setItems);
+    getStudentEnrollments(student.id).then(rows => {
+      // Dedupe by course.id — a student can be enrolled in multiple sections
+      // of the same course; we just need them to pick the course here. The
+      // first active enrollment wins; keep their full row for use downstream.
+      const byCourse = new Map();
+      for (const it of (rows || [])) {
+        const cid = it?.course?.id;
+        if (cid && !byCourse.has(cid)) byCourse.set(cid, it);
+      }
+      setItems([...byCourse.values()]);
+    });
   }, [student]);
 
   if (items === null) {
