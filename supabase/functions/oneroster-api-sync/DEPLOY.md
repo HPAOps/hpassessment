@@ -61,13 +61,25 @@ Expected results:
 
 ## Step 2 — Deploy the Edge Function
 
-File lives at `/app/supabase/functions/oneroster-api-sync/index.ts`.
+Two source files exist (identical logic, different quoting):
+- `/app/supabase/functions/oneroster-api-sync/index.ts` — for CLI deploy
+- `/app/supabase/functions/oneroster-api-sync/index.dashboard.ts` — for paste
+  into the Supabase Dashboard editor (uses ZERO double quotes; the dashboard
+  editor mangles `"` on paste and breaks Deno parsing).
 
-### Option A — Supabase Dashboard
+> **v6 (2026-02)**: Both files now use a chunked `upsert(...).select()`
+> pipeline. Earlier versions did `from(t).select().in('col', [4000+ ids])`
+> which exceeded the PostgREST URL length limit (~4KB), causing the sync
+> to crash and `course_sections` / `enrollments` to drop to zero. The new
+> pipeline never sends large IN clauses — every post-upsert id map is
+> built from the rows the upsert itself returns, in 500-row batches.
 
-1. Open **Supabase Dashboard → Edge Functions → Deploy a new function**
-2. Name it exactly: `oneroster-api-sync`
-3. Copy/paste the entire contents of `/app/supabase/functions/oneroster-api-sync/index.ts`
+### Option A — Supabase Dashboard (recommended)
+
+1. Open **Supabase Dashboard → Edge Functions → `oneroster-api-sync`** (or
+   click *Deploy a new function* and name it exactly `oneroster-api-sync`)
+2. Open `/app/supabase/functions/oneroster-api-sync/index.dashboard.ts`
+3. Select all + copy + paste into the dashboard editor
 4. Click **Deploy**
 
 ### Option B — Supabase CLI (if installed)

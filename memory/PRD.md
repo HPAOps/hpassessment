@@ -70,8 +70,14 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   Edge Function URL + service key in `app_secrets` so nothing is hardcoded.
 - Frontend: "Run sync now" button on the OneRoster card (super_admin only)
   with live toast + row-count summary.
-- **Status**: code complete, pending user deployment of the Edge Function
-  + SQL scripts + provisioning of the (rotated) client secret.
+- **v6 (2026-02)**: Replaced bulk `.in('col', [4000+ ids])` lookups with a
+  chunked `upsert(...).select(...)` pipeline (`upsertChunked` helper) so id
+  maps are harvested from the upsert response itself in 500-row batches.
+  Fixes the PostgREST URL-length crash on real-world rosters and lets
+  `course_sections` / `student_enrollments` / `teacher_class_assignments`
+  populate cleanly. `staff` table is upserted alongside `teachers`/`students`.
+- **Status**: code complete. Pending user redeploy of `index.dashboard.ts`
+  to the Supabase Dashboard and a fresh "Run sync now" to verify.
 
 ## Phase B — Secrets vault + Integrations admin (completed 2026-02)
 
