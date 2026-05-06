@@ -33,40 +33,23 @@ export async function extractDocxImages(file) {
   }
 
   // 2) Read document.xml and walk it in order, tracking the most recently
-  //    seen question number marker ("1)", "2)", etc.) so images BEFORE the
-  //    first marker (logos, headers) are skipped, and each image attaches
-  //    to the question number it appears under.
+  //    seen question number marker so each image attaches to the right qn.
+  //    Two modes are supported:
+  //
+  //    a. Literal markers ("1)" "2)" ...) appearing in `<w:t>` runs.
+  //    b. Word auto-numbered lists, where the question paragraph carries
+  //       `<w:numPr><w:numId w:val=N/></w:numPr>` and the literal number
+  //       isn't in the text at all (Word renders it from numbering.xml).
+  //
+  //    We try (a) first; if it produced 0 mappings, we re-scan with (b).
+  //    Images BEFORE the first marker (logos, headers) are skipped.
   const docFile = zip.file("word/document.xml");
   if (!docFile) throw new Error("Not a valid .docx (missing word/document.xml)");
   const docXml = await docFile.async("string");
 
-  // Tokens: either an inline text block (to scan for "N)") or an image rId.
-  const tokenRe = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|r:embed="(rId\d+)"|r:link="(rId\d+)"/g;
-  // Match question number marker like "1)" "12)" "33)"
-  const qnRe = /(?:^|[\s>])(\d{1,3})\)\s*(?:$|[\s<])/;
-
-  const imageByQn = new Map(); // qn -> {rid, ext, blob, dataUrl} (first wins)
-  let currentQn = null;
-
-  let m;
-  while ((m = tokenRe.exec(docXml)) !== null) {
-    const txt = m[1];
-    const rid = m[2] || m[3];
-    if (txt) {
-      // Decode entities and scan for "N)" — there can be multiple in one chunk
-      const decoded = txt.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'");
-      const padded = " " + decoded + " "; // pad so qnRe word boundaries work at edges
-      const qm = padded.match(qnRe);
-      if (qm) {
-        const n = parseInt(qm[1], 10);
-        if (n > 0 && n < 1000) currentQn = n;
-      }
-    } else if (rid && currentQn !== null) {
-      // First image after this question number wins
-      if (!imageByQn.has(currentQn)) {
-        imageByQn.set(currentQn, rid);
-      }
-    }
+  let imageByQn = scanLiteralMarkers(docXml);
+  if (imageByQn.size === 0) {
+    imageByQn = scanAutoNumberedList(docXml);
   }
 
   // 3) Resolve each rId -> media file -> Blob
@@ -101,6 +84,69 @@ function mimeFor(ext) {
     case "wmf":  return "image/x-wmf";
     default:     return "application/octet-stream";
   }
+}
+
+// Mode A: scan `<w:t>` text runs for literal question markers like "1)" "12)".
+// Returns a Map<qn -> rId>. Only the first image after each marker wins.
+function scanLiteralMarkers(docXml) {
+  const tokenRe = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|r:embed="(rId\d+)"|r:link="(rId\d+)"/g;
+  const qnRe = /(?:^|[\s>])(\d{1,3})\)\s*(?:$|[\s<])/;
+  const imageByQn = new Map();
+  let currentQn = null;
+  let m;
+  while ((m = tokenRe.exec(docXml)) !== null) {
+    const txt = m[1];
+    const rid = m[2] || m[3];
+    if (txt) {
+      const decoded = txt.replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&apos;/g,"'");
+      const padded = " " + decoded + " ";
+      const qm = padded.match(qnRe);
+      if (qm) {
+        const n = parseInt(qm[1], 10);
+        if (n > 0 && n < 1000) currentQn = n;
+      }
+    } else if (rid && currentQn !== null) {
+      if (!imageByQn.has(currentQn)) imageByQn.set(currentQn, rid);
+    }
+  }
+  return imageByQn;
+}
+
+// Mode B: scan for Word auto-numbered list paragraphs (`<w:numPr>`) which
+// is how booklets that look like "1. 2. 3." or "1) 2) 3)" but rely on
+// Word's automatic numbering work. We pick the MOST FREQUENT numId in the
+// document — that's overwhelmingly the question list (Word uses different
+// numIds for any sub-lists / answer choices that are also auto-numbered).
+// We then auto-increment a counter starting at 1 for each occurrence.
+function scanAutoNumberedList(docXml) {
+  // First, find the dominant numId (the question list).
+  const allNumIds = [...docXml.matchAll(/<w:numPr>[\s\S]*?<w:numId\s+w:val="(\d+)"[\s\S]*?<\/w:numPr>/g)]
+    .map(x => x[1]);
+  if (!allNumIds.length) return new Map();
+  const counts = new Map();
+  for (const id of allNumIds) counts.set(id, (counts.get(id) || 0) + 1);
+  let dominant = null, max = 0;
+  for (const [id, n] of counts) if (n > max) { dominant = id; max = n; }
+  if (!dominant) return new Map();
+
+  // Walk the doc in order. Each paragraph that opens a numPr with the
+  // dominant numId is a question (qn = currentQn + 1). The next image
+  // (rId via r:embed/r:link) belongs to that question.
+  const tokenRe = /<w:numPr>([\s\S]*?)<\/w:numPr>|r:embed="(rId\d+)"|r:link="(rId\d+)"/g;
+  const imageByQn = new Map();
+  let currentQn = 0;
+  let m;
+  while ((m = tokenRe.exec(docXml)) !== null) {
+    const numBlock = m[1];
+    const rid = m[2] || m[3];
+    if (numBlock) {
+      const idMatch = numBlock.match(/<w:numId\s+w:val="(\d+)"/);
+      if (idMatch && idMatch[1] === dominant) currentQn++;
+    } else if (rid && currentQn > 0) {
+      if (!imageByQn.has(currentQn)) imageByQn.set(currentQn, rid);
+    }
+  }
+  return imageByQn;
 }
 
 function blobToDataUrl(blob) {
