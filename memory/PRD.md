@@ -123,21 +123,31 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   when literal "1)" markers don't exist in the text. Verified against the
   Biology booklet (42 questions, 42 images, clean 1:1 mapping).
 
-## Phase E — Sections page (2026-02)
-
-- New `/admin/sections` index page and `/admin/sections/:id` roster page.
-- Visibility enforced by existing RLS:
+## Phase E — Sections page + Test edit + Student flow fixes (2026-02)
+- Sections page visibility enforced by existing RLS:
   - **super_admin** / **district_admin** — every section
   - **campus_admin** — only sections at their campus
   - **teacher** — only sections in their `teacher_class_assignments`
 - Index columns: course title + code, section code, campus, teacher(s),
   enrollment count, "Roster →" link.
-- Roster columns (per the user's request): last name, first name, Student ID,
-  grade level. Filter active students only. Search by name or Student ID.
-- Nav: new top-level "Sections" item visible to all 4 staff roles.
-- Reuses RPC-free Supabase REST joins (`course_sections.select(courses,
-  campuses, teacher_class_assignments(teachers), student_enrollments(count))`)
-  so no new DB migrations needed.
+- Roster columns: last name, first name, Student ID, grade. Active students only.
+- Super-admin-only **campus filter** dropdown.
+- Nav: new top-level "Sections" item.
+- **Test edit dialog**: adjust BOC/EOC date windows, rename, change linked
+  courses on existing test rows (`updateTest` extended to sync `test_courses`).
+- **.docx extractor v2**: Word auto-numbered list support (`<w:numPr>`) in
+  addition to literal "1)" markers — required for the Biology booklet.
+- **Student-side RPC v2 rewrite** (`fix_student_rpcs_v2.sql`):
+  - Multi-course enrollment check via `test_courses` (legacy single-pointer
+    `course_id` fallback retained).
+  - BOC/EOC phase detection from `boc_opens_at`/`eoc_opens_at` windows.
+  - **Critical**: inserts the per-question rows into `test_attempt_questions`
+    (the prior version omitted this → student saw "Question 1 of 0").
+  - In-place repair of any pre-fix in-progress attempts + one-shot backfill.
+- **Test account re-stitch SQL** (`restitch_test_accounts.sql`) to reconnect
+  `madison@hpa.test` and `teacher@hpa.test` to real OneRoster rows after the
+  first sync wiped their seeded `OR-MHP` / `OR-T-1` FKs.
+
 
 ## Implemented (v1) — completion date 2026-02
 
