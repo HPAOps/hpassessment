@@ -37,14 +37,20 @@ async function rpcDirect(fnName, args) {
   const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fnName}`, {
     method: "POST", headers, body: JSON.stringify(args ?? {}),
   });
-  // Read body exactly once.
-  const text = await resp.text();
+  // Defensive: clone before reading. Third-party fetch instrumentation
+  // (PostHog session recording, devtools) can race us to read the body
+  // and leave the original stream consumed, producing the cryptic
+  // "Failed to execute 'text' on 'Response': body stream already read".
+  const text = await resp.clone().text();
   let body = null;
   if (text) { try { body = JSON.parse(text); } catch { body = text; } }
 
   if (!resp.ok) {
-    const msg = (body && typeof body === "object" && (body.message || body.hint || body.details))
-      || (typeof body === "string" && body) || `HTTP ${resp.status}`;
+    const body_msg = (body && typeof body === "object" && (body.message || body.hint || body.details))
+      || (typeof body === "string" && body) || "";
+    const msg = body_msg
+      ? `${body_msg} (HTTP ${resp.status})`
+      : `HTTP ${resp.status} from ${fnName}`;
     const err = new Error(msg);
     err.code = body?.code;
     err.details = body?.details;

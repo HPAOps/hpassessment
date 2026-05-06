@@ -149,7 +149,27 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   first sync wiped their seeded `OR-MHP` / `OR-T-1` FKs.
 
 
+## Phase F — Student-flow stability (2026-02)
+
+- **`rpcDirect()` helper** in `lib/api.js` that bypasses supabase-js@2.105.1's
+  broken RPC error handling (it double-reads response bodies, surfacing every
+  RPC error as the cryptic `TypeError: Failed to execute 'text' on
+  'Response': body stream already read`). All five student-side RPCs
+  (`student_open_tests`, `start_or_get_attempt`, `get_student_attempt`,
+  `save_response`, `submit_attempt`) now use it.
+- `resp.clone().text()` so PostHog's fetch instrumentation can't race us
+  to read the body.
+- **PostHog hardening (FERPA)**: `disable_session_recording: true`,
+  `autocapture: false`, `advanced_disable_decide: true` — assessment
+  payloads (student answers, names, IDs) MUST NOT leave the browser to
+  any third party. Was incidentally also the cause of the
+  body-stream-already-read race.
+- StudentTest page now wraps the `useEffect` and `pick()` / `onSubmit()` in
+  try/catch with a real toast and an "expired session → bounce back to
+  courses" recovery path.
+
 ## Implemented (v1) — completion date 2026-02
+
 
 - Student flow: ID login → course picker → teacher verify → test selector →
   image-based test (zoom, prev/next, navigator, autosave) → submit confirm.

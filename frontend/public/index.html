@@ -102,11 +102,18 @@
             })(document, window.posthog || []);
             posthog.init("phc_xAvL2Iq4tFmANRE7kzbKwaSqp1HJjN7x48s3vr0CMjs", {
                 api_host: "https://us.i.posthog.com",
-                person_profiles: "identified_only", // or 'always' to create profiles for anonymous users as well,
-                session_recording: {
-                    recordCrossOriginIframes: true,
-                    capturePerformance: false,
-                },
+                person_profiles: "identified_only",
+                // FERPA: assessment payloads (student answers, names, IDs) MUST
+                // NOT be sent to PostHog. Disable session recording entirely
+                // and turn off all network-body capture. PostHog's fetch
+                // instrumentation was also racing our Supabase RPC reads,
+                // producing 'body stream already read' errors on the student
+                // test page.
+                disable_session_recording: true,
+                capture_pageview: true,
+                autocapture: false,
+                capture_performance: false,
+                advanced_disable_decide: true,
             });
         </script>
     </body>
