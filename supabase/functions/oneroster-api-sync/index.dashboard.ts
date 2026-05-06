@@ -86,17 +86,27 @@ Deno.serve(async (req: Request) => {
     const accessToken = await fetchAccessToken(tokenUrl, clientId, clientSecret);
     const data = await fetchAll(baseUrl, accessToken);
     const mapped = mapOneRosterToOperational(data);
-    const { staffAdded, droppedStudentEnrollments, droppedTeacherAssignments } = await upsertMapped(admin, mapped);
+    const dropped = await upsertMapped(admin, mapped);
 
     row_counts = mapped.counts;
-    if (staffAdded) row_counts.whitelist_added = staffAdded;
-    if (droppedStudentEnrollments) row_counts.dropped_student_enrollments = droppedStudentEnrollments;
-    if (droppedTeacherAssignments) row_counts.dropped_teacher_assignments = droppedTeacherAssignments;
+    if (dropped.staffAdded) row_counts.whitelist_added = dropped.staffAdded;
+    if (dropped.droppedStudentEnrollments) {
+      row_counts.dropped_student_enrollments = dropped.droppedStudentEnrollments;
+      if (dropped.droppedStudentMissingStudent) row_counts.dropped_student_enrollments_missing_student = dropped.droppedStudentMissingStudent;
+      if (dropped.droppedStudentMissingSection) row_counts.dropped_student_enrollments_missing_section = dropped.droppedStudentMissingSection;
+      if (dropped.droppedStudentMissingBoth)    row_counts.dropped_student_enrollments_missing_both    = dropped.droppedStudentMissingBoth;
+    }
+    if (dropped.droppedTeacherAssignments) {
+      row_counts.dropped_teacher_assignments = dropped.droppedTeacherAssignments;
+      if (dropped.droppedTeacherMissingTeacher) row_counts.dropped_teacher_assignments_missing_teacher = dropped.droppedTeacherMissingTeacher;
+      if (dropped.droppedTeacherMissingSection) row_counts.dropped_teacher_assignments_missing_section = dropped.droppedTeacherMissingSection;
+      if (dropped.droppedTeacherMissingBoth)    row_counts.dropped_teacher_assignments_missing_both    = dropped.droppedTeacherMissingBoth;
+    }
     const warnings: string[] = [];
     if (!row_counts.orgs)  warnings.push('no orgs returned');
     if (!row_counts.users) warnings.push('no users returned');
-    if (droppedStudentEnrollments) warnings.push(`${droppedStudentEnrollments} student enrollments not linked`);
-    if (droppedTeacherAssignments) warnings.push(`${droppedTeacherAssignments} teacher assignments not linked`);
+    if (dropped.droppedStudentEnrollments) warnings.push(`${dropped.droppedStudentEnrollments} student enrollments not linked`);
+    if (dropped.droppedTeacherAssignments) warnings.push(`${dropped.droppedTeacherAssignments} teacher assignments not linked`);
 
     const runId = await recordSyncRun(admin, {
       status: warnings.length ? 'partial' : 'success',
@@ -257,7 +267,10 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   const roleStats: Record<string, number> = {};
   for (const u of (d.users ?? [])) {
     const userStatus = String(u.status || 'active').toLowerCase();
-    if (userStatus !== 'active') continue;
+    // Only skip rows OneRoster has flagged for deletion. We still upsert
+    // 'inactive' users (with is_active=false) so their enrollments link.
+    if (userStatus === 'tobedeleted') continue;
+    const isUserActive = userStatus === 'active';
 
     const roles = Array.isArray(u.roles) ? u.roles : [];
     const primaryEntry =
@@ -267,6 +280,22 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
     const primaryRoleStr = primaryEntry
       ? String(primaryEntry.role || '').toLowerCase()
       : String(u.role || '').toLowerCase();
+
+    // Permissive secondary check: if primary role is something we'd skip
+    // (parent/guardian/relative/empty) but the user has a recognized role
+    // somewhere else in roles[], use that as a fallback.
+    const allRoleStrs = roles
+      .map((r: any) => String(r.role || '').toLowerCase())
+      .filter(Boolean);
+    const fallbackRoleStr =
+         (allRoleStrs.includes('student')                          ? 'student' : null)
+      || (allRoleStrs.includes('teacher')                          ? 'teacher' : null)
+      || (allRoleStrs.includes('aide')                             ? 'aide'    : null)
+      || null;
+    const skippableSet = new Set(['parent', 'guardian', 'relative', '']);
+    const effectiveRoleStr = (skippableSet.has(primaryRoleStr) && fallbackRoleStr)
+      ? fallbackRoleStr
+      : primaryRoleStr;
 
     roleStats[primaryRoleStr || '(none)'] = (roleStats[primaryRoleStr || '(none)'] || 0) + 1;
 
@@ -279,33 +308,33 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
       || (Array.isArray(u.orgs) ? u.orgs[0]?.sourcedId : null)
       || null;
 
-    if (primaryRoleStr === 'student') {
+    if (effectiveRoleStr === 'student') {
       students.push({
         oneroster_user_sourced_id: u.sourcedId,
         student_id: u.identifier || u.username || u.sourcedId,
         first_name: u.givenName, last_name: u.familyName,
         email: u.email, grade_level: parseInt(u.grades || u.grade || '9', 10) || null,
         primary_org_sourced_id: primaryOrgSourcedId,
-        is_active: true,
+        is_active: isUserActive,
       });
-    } else if (primaryRoleStr === 'teacher' || primaryRoleStr === 'aide') {
+    } else if (effectiveRoleStr === 'teacher' || effectiveRoleStr === 'aide') {
       teachers.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
         primary_org_sourced_id: primaryOrgSourcedId,
-        is_active: true,
+        oneroster_role: effectiveRoleStr,
+        is_active: isUserActive,
       });
     } else {
-      const nonStaff = new Set(['parent', 'guardian', 'relative', '']);
-      if (nonStaff.has(primaryRoleStr)) continue;
+      if (skippableSet.has(effectiveRoleStr)) continue;
 
       staff.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
         primary_org_sourced_id: primaryOrgSourcedId,
-        oneroster_role: primaryRoleStr,
+        oneroster_role: effectiveRoleStr,
         title: u.title || null,
-        is_active: true,
+        is_active: isUserActive,
       });
     }
   }
@@ -412,13 +441,22 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
 
   // 6) Resolve and upsert enrollments
   let droppedStudentEnrollments = 0;
+  let droppedStudentMissingStudent = 0;
+  let droppedStudentMissingSection = 0;
+  let droppedStudentMissingBoth = 0;
   let droppedTeacherAssignments = 0;
+  let droppedTeacherMissingTeacher = 0;
+  let droppedTeacherMissingSection = 0;
+  let droppedTeacherMissingBoth = 0;
+
   const seStrong: any[] = [];
   for (const se of r.student_enrollments ?? []) {
     const sId = studentMap.get(se._or_user_sid);
     const cId = sectionMap.get(se._or_class_sid);
     delete se._or_user_sid; delete se._or_class_sid;
-    if (!sId || !cId) { droppedStudentEnrollments++; continue; }
+    if (!sId && !cId) { droppedStudentMissingBoth++; droppedStudentEnrollments++; continue; }
+    if (!sId)         { droppedStudentMissingStudent++; droppedStudentEnrollments++; continue; }
+    if (!cId)         { droppedStudentMissingSection++; droppedStudentEnrollments++; continue; }
     se.student_id = sId; se.course_section_id = cId;
     seStrong.push(se);
   }
@@ -429,7 +467,9 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     const tId = teacherMap.get(ta._or_user_sid);
     const cId = sectionMap.get(ta._or_class_sid);
     delete ta._or_user_sid; delete ta._or_class_sid;
-    if (!tId || !cId) { droppedTeacherAssignments++; continue; }
+    if (!tId && !cId) { droppedTeacherMissingBoth++; droppedTeacherAssignments++; continue; }
+    if (!tId)         { droppedTeacherMissingTeacher++; droppedTeacherAssignments++; continue; }
+    if (!cId)         { droppedTeacherMissingSection++; droppedTeacherAssignments++; continue; }
     ta.teacher_id = tId; ta.course_section_id = cId;
     tcStrong.push(ta);
   }
@@ -491,7 +531,13 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
   return {
     staffAdded: whitelistAdded,
     droppedStudentEnrollments,
+    droppedStudentMissingStudent,
+    droppedStudentMissingSection,
+    droppedStudentMissingBoth,
     droppedTeacherAssignments,
+    droppedTeacherMissingTeacher,
+    droppedTeacherMissingSection,
+    droppedTeacherMissingBoth,
   };
 }
 

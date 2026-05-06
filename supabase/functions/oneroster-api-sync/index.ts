@@ -1,8 +1,7 @@
 // ==========================================================================
 // HPA -- OneRoster v1.2 REST API sync  (Supabase Edge Function)
-// ==========================================================================
-// Dashboard-editor safe version: single quotes only, pure ASCII.
-// Deployed name: oneroster-api-sync
+// v6: streamlined upsert pipeline using upsert(...).select() to capture IDs
+// without needing big IN clauses (avoids URL length limits on PostgREST).
 // ==========================================================================
 
 // deno-lint-ignore-file no-explicit-any
@@ -66,7 +65,6 @@ Deno.serve(async (req: Request) => {
   const clientId     = secretMap.get('oneroster_api_client_id');
   const clientSecret = secretMap.get('oneroster_api_client_secret');
   const tokenUrl     = secretMap.get('oneroster_api_token_url');
-  // Preserve query string (e.g. ?appName=hpa) — only strip trailing slashes on the path
   const rawBaseUrl   = secretMap.get('oneroster_api_base_url') || '';
   const baseUrl      = rawBaseUrl.includes('?')
     ? rawBaseUrl
@@ -88,17 +86,27 @@ Deno.serve(async (req: Request) => {
     const accessToken = await fetchAccessToken(tokenUrl, clientId, clientSecret);
     const data = await fetchAll(baseUrl, accessToken);
     const mapped = mapOneRosterToOperational(data);
-    const { staffAdded, droppedStudentEnrollments, droppedTeacherAssignments } = await upsertMapped(admin, mapped);
+    const dropped = await upsertMapped(admin, mapped);
 
     row_counts = mapped.counts;
-    if (staffAdded) row_counts.whitelist_added = staffAdded;
-    if (droppedStudentEnrollments) row_counts.dropped_student_enrollments = droppedStudentEnrollments;
-    if (droppedTeacherAssignments) row_counts.dropped_teacher_assignments = droppedTeacherAssignments;
+    if (dropped.staffAdded) row_counts.whitelist_added = dropped.staffAdded;
+    if (dropped.droppedStudentEnrollments) {
+      row_counts.dropped_student_enrollments = dropped.droppedStudentEnrollments;
+      if (dropped.droppedStudentMissingStudent) row_counts.dropped_student_enrollments_missing_student = dropped.droppedStudentMissingStudent;
+      if (dropped.droppedStudentMissingSection) row_counts.dropped_student_enrollments_missing_section = dropped.droppedStudentMissingSection;
+      if (dropped.droppedStudentMissingBoth)    row_counts.dropped_student_enrollments_missing_both    = dropped.droppedStudentMissingBoth;
+    }
+    if (dropped.droppedTeacherAssignments) {
+      row_counts.dropped_teacher_assignments = dropped.droppedTeacherAssignments;
+      if (dropped.droppedTeacherMissingTeacher) row_counts.dropped_teacher_assignments_missing_teacher = dropped.droppedTeacherMissingTeacher;
+      if (dropped.droppedTeacherMissingSection) row_counts.dropped_teacher_assignments_missing_section = dropped.droppedTeacherMissingSection;
+      if (dropped.droppedTeacherMissingBoth)    row_counts.dropped_teacher_assignments_missing_both    = dropped.droppedTeacherMissingBoth;
+    }
     const warnings: string[] = [];
     if (!row_counts.orgs)  warnings.push('no orgs returned');
     if (!row_counts.users) warnings.push('no users returned');
-    if (droppedStudentEnrollments) warnings.push(`${droppedStudentEnrollments} student enrollments not linked (missing student or section)`);
-    if (droppedTeacherAssignments) warnings.push(`${droppedTeacherAssignments} teacher assignments not linked`);
+    if (dropped.droppedStudentEnrollments) warnings.push(`${dropped.droppedStudentEnrollments} student enrollments not linked`);
+    if (dropped.droppedTeacherAssignments) warnings.push(`${dropped.droppedTeacherAssignments} teacher assignments not linked`);
 
     const runId = await recordSyncRun(admin, {
       status: warnings.length ? 'partial' : 'success',
@@ -130,9 +138,6 @@ Deno.serve(async (req: Request) => {
   }
 });
 
-// --------------------------------------------------------------------------
-// OAuth: client_credentials grant
-// --------------------------------------------------------------------------
 async function fetchAccessToken(tokenUrl: string, clientId: string, clientSecret: string) {
   const body = new URLSearchParams({
     grant_type: 'client_credentials',
@@ -155,9 +160,6 @@ async function fetchAccessToken(tokenUrl: string, clientId: string, clientSecret
   return j.access_token as string;
 }
 
-// --------------------------------------------------------------------------
-// Paginated GET
-// --------------------------------------------------------------------------
 const PAGE_LIMIT = 5000;
 const COLLECTIONS = [
   { key: 'orgs',              path: '/orgs' },
@@ -172,7 +174,6 @@ const COLLECTIONS = [
 async function fetchCollection(baseUrl: string, path: string, token: string) {
   const out: any[] = [];
   let offset = 0;
-  // Preserve any query string the user included in the Base URL (e.g. ?appName=hpa)
   const [baseRoot, baseQuery = ''] = baseUrl.split('?');
   const basePathRooted = baseRoot.replace(/\/+$/, '');
   for (;;) {
@@ -208,9 +209,6 @@ async function fetchAll(baseUrl: string, token: string) {
   return data;
 }
 
-// --------------------------------------------------------------------------
-// Mapping
-// --------------------------------------------------------------------------
 function mapOneRosterToOperational(d: Record<string, any[]>) {
   const counts = { orgs: 0, sessions: 0, courses: 0, classes: 0, users: 0, students: 0, teachers: 0, staff: 0, enrollments: 0, demographics: 0 };
 
@@ -253,8 +251,6 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   }));
   counts.courses = courses.length;
 
-  // course_sections need course_id and campus_id resolved AFTER upserts;
-  // capture the OneRoster ref ids here as temp fields.
   const course_sections = (d.classes ?? []).map(cl => ({
     oneroster_class_sourced_id: cl.sourcedId,
     section_code: cl.classCode || cl.title || cl.sourcedId,
@@ -268,18 +264,15 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   const students: any[] = [];
   const teachers: any[] = [];
   const staff: any[] = [];
-  const roleStats: Record<string, number> = {}; // diagnostic: primaryRole -> count
+  const roleStats: Record<string, number> = {};
   for (const u of (d.users ?? [])) {
-    // Item 1: Only pull active users
     const userStatus = String(u.status || 'active').toLowerCase();
-    if (userStatus !== 'active') continue;
+    // Only skip rows OneRoster has flagged for deletion. We still upsert
+    // 'inactive' users (with is_active=false) so their enrollments link.
+    if (userStatus === 'tobedeleted') continue;
+    const isUserActive = userStatus === 'active';
 
     const roles = Array.isArray(u.roles) ? u.roles : [];
-
-    // Use the OneRoster `roleType=primary` role to bucket the user. Many
-    // admin staff (principals, asst principals, academic coaches) ALSO carry
-    // a secondary teaching role for backup coverage; they should still be
-    // staff. Falls back to first role, then top-level user.role.
     const primaryEntry =
          roles.find((r: any) => String(r.roleType || '').toLowerCase() === 'primary')
       || roles[0]
@@ -288,9 +281,24 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
       ? String(primaryEntry.role || '').toLowerCase()
       : String(u.role || '').toLowerCase();
 
+    // Permissive secondary check: if primary role is something we'd skip
+    // (parent/guardian/relative/empty) but the user has a recognized role
+    // somewhere else in roles[], use that as a fallback.
+    const allRoleStrs = roles
+      .map((r: any) => String(r.role || '').toLowerCase())
+      .filter(Boolean);
+    const fallbackRoleStr =
+         (allRoleStrs.includes('student')                          ? 'student' : null)
+      || (allRoleStrs.includes('teacher')                          ? 'teacher' : null)
+      || (allRoleStrs.includes('aide')                             ? 'aide'    : null)
+      || null;
+    const skippableSet = new Set(['parent', 'guardian', 'relative', '']);
+    const effectiveRoleStr = (skippableSet.has(primaryRoleStr) && fallbackRoleStr)
+      ? fallbackRoleStr
+      : primaryRoleStr;
+
     roleStats[primaryRoleStr || '(none)'] = (roleStats[primaryRoleStr || '(none)'] || 0) + 1;
 
-    // Pick org from primary role first; fall back to any role / primaryOrg.
     const orgFromPrimary = primaryEntry?.org?.sourcedId;
     const primaryOrgSourcedId =
          orgFromPrimary
@@ -300,33 +308,33 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
       || (Array.isArray(u.orgs) ? u.orgs[0]?.sourcedId : null)
       || null;
 
-    if (primaryRoleStr === 'student') {
+    if (effectiveRoleStr === 'student') {
       students.push({
         oneroster_user_sourced_id: u.sourcedId,
         student_id: u.identifier || u.username || u.sourcedId,
         first_name: u.givenName, last_name: u.familyName,
         email: u.email, grade_level: parseInt(u.grades || u.grade || '9', 10) || null,
         primary_org_sourced_id: primaryOrgSourcedId,
-        is_active: true,
+        is_active: isUserActive,
       });
-    } else if (primaryRoleStr === 'teacher' || primaryRoleStr === 'aide') {
+    } else if (effectiveRoleStr === 'teacher' || effectiveRoleStr === 'aide') {
       teachers.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
         primary_org_sourced_id: primaryOrgSourcedId,
-        is_active: true,
+        oneroster_role: effectiveRoleStr,
+        is_active: isUserActive,
       });
     } else {
-      const nonStaff = new Set(['parent', 'guardian', 'relative', '']);
-      if (nonStaff.has(primaryRoleStr)) continue;
+      if (skippableSet.has(effectiveRoleStr)) continue;
 
       staff.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
         primary_org_sourced_id: primaryOrgSourcedId,
-        oneroster_role: primaryRoleStr,
+        oneroster_role: effectiveRoleStr,
         title: u.title || null,
-        is_active: true,
+        is_active: isUserActive,
       });
     }
   }
@@ -366,16 +374,8 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   };
 }
 
-// --------------------------------------------------------------------------
-// Upsert pipeline
-//
-// IMPORTANT: PostgREST has a URL length limit (~4KB-8KB). Any `.in(col, [...])`
-// query over 200+ ids will exceed it. To avoid that, every post-upsert id
-// lookup uses `.upsert(...).select(...)` in 500-row chunks so we get back
-// the new ids on the same round-trip. No standalone `.in()` lookups for
-// large id sets.
-// --------------------------------------------------------------------------
-
+// Chunked upsert that returns id maps in one pass via .select(). Avoids
+// huge `.in()` URLs that PostgREST rejects.
 async function upsertChunked(
   admin: any, table: string, rows: any[],
   conflictCol: string, idMap?: Map<string, string>,
@@ -388,7 +388,7 @@ async function upsertChunked(
       .upsert(slice, { onConflict: conflictCol, ignoreDuplicates: false })
       .select(`id, ${conflictCol}`);
     if (error) throw new Error(`${table} upsert failed: ${error.message}`);
-    if (idMap) for (const row of (data ?? [])) idMap.set(row[conflictCol], row.id);
+    if (idMap) for (const row of data ?? []) idMap.set(row[conflictCol], row.id);
   }
 }
 
@@ -399,27 +399,21 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
   const campusMap = new Map<string, string>();
   await upsertChunked(admin, 'campuses', r.campuses, 'oneroster_org_sourced_id', campusMap);
 
-  // Attach campus_id to teachers/students/staff, then strip the temp field
+  // Resolve primary-org -> campus_id for users
   for (const t of r.teachers ?? []) {
-    if (t.primary_org_sourced_id && campusMap.has(t.primary_org_sourced_id)) {
-      t.campus_id = campusMap.get(t.primary_org_sourced_id);
-    }
+    if (t.primary_org_sourced_id && campusMap.has(t.primary_org_sourced_id)) t.campus_id = campusMap.get(t.primary_org_sourced_id);
     delete t.primary_org_sourced_id;
   }
   for (const s of r.students ?? []) {
-    if (s.primary_org_sourced_id && campusMap.has(s.primary_org_sourced_id)) {
-      s.campus_id = campusMap.get(s.primary_org_sourced_id);
-    }
+    if (s.primary_org_sourced_id && campusMap.has(s.primary_org_sourced_id)) s.campus_id = campusMap.get(s.primary_org_sourced_id);
     delete s.primary_org_sourced_id;
   }
   for (const st of r.staff ?? []) {
-    if (st.primary_org_sourced_id && campusMap.has(st.primary_org_sourced_id)) {
-      st.campus_id = campusMap.get(st.primary_org_sourced_id);
-    }
+    if (st.primary_org_sourced_id && campusMap.has(st.primary_org_sourced_id)) st.campus_id = campusMap.get(st.primary_org_sourced_id);
     delete st.primary_org_sourced_id;
   }
 
-  // 2) school_years + terms
+  // 2) School years + terms
   await upsertChunked(admin, 'school_years', r.school_years, 'oneroster_academic_session_sourced_id');
   const termMap = new Map<string, string>();
   await upsertChunked(admin, 'terms', r.terms, 'oneroster_academic_session_sourced_id', termMap);
@@ -428,7 +422,7 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
   const courseMap = new Map<string, string>();
   await upsertChunked(admin, 'courses', r.courses, 'oneroster_course_sourced_id', courseMap);
 
-  // 4) course_sections — resolve course_id, campus_id, term_id from temp fields
+  // 4) course_sections — resolve course_id, campus_id, term_id
   for (const cs of r.course_sections ?? []) {
     if (cs._or_course_sid && courseMap.has(cs._or_course_sid)) cs.course_id = courseMap.get(cs._or_course_sid);
     if (cs._or_school_sid && campusMap.has(cs._or_school_sid)) cs.campus_id = campusMap.get(cs._or_school_sid);
@@ -447,13 +441,22 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
 
   // 6) Resolve and upsert enrollments
   let droppedStudentEnrollments = 0;
+  let droppedStudentMissingStudent = 0;
+  let droppedStudentMissingSection = 0;
+  let droppedStudentMissingBoth = 0;
   let droppedTeacherAssignments = 0;
+  let droppedTeacherMissingTeacher = 0;
+  let droppedTeacherMissingSection = 0;
+  let droppedTeacherMissingBoth = 0;
+
   const seStrong: any[] = [];
   for (const se of r.student_enrollments ?? []) {
     const sId = studentMap.get(se._or_user_sid);
     const cId = sectionMap.get(se._or_class_sid);
     delete se._or_user_sid; delete se._or_class_sid;
-    if (!sId || !cId) { droppedStudentEnrollments++; continue; }
+    if (!sId && !cId) { droppedStudentMissingBoth++; droppedStudentEnrollments++; continue; }
+    if (!sId)         { droppedStudentMissingStudent++; droppedStudentEnrollments++; continue; }
+    if (!cId)         { droppedStudentMissingSection++; droppedStudentEnrollments++; continue; }
     se.student_id = sId; se.course_section_id = cId;
     seStrong.push(se);
   }
@@ -464,14 +467,16 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     const tId = teacherMap.get(ta._or_user_sid);
     const cId = sectionMap.get(ta._or_class_sid);
     delete ta._or_user_sid; delete ta._or_class_sid;
-    if (!tId || !cId) { droppedTeacherAssignments++; continue; }
+    if (!tId && !cId) { droppedTeacherMissingBoth++; droppedTeacherAssignments++; continue; }
+    if (!tId)         { droppedTeacherMissingTeacher++; droppedTeacherAssignments++; continue; }
+    if (!cId)         { droppedTeacherMissingSection++; droppedTeacherAssignments++; continue; }
     ta.teacher_id = tId; ta.course_section_id = cId;
     tcStrong.push(ta);
   }
   await upsertChunked(admin, 'teacher_class_assignments', tcStrong, 'oneroster_enrollment_sourced_id');
 
-  // 7) Auto-populate staff_whitelist for SSO. Only insert rows that don't
-  //    already exist so manual role upgrades are preserved.
+  // 7) Auto-populate staff_whitelist for SSO. We only insert rows that
+  //    don't already exist so manual role upgrades are preserved.
   let whitelistAdded = 0;
 
   const teacherWlRows: any[] = (r.teachers ?? [])
@@ -501,7 +506,7 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
 
   const allWl = [...teacherWlRows, ...staffWlRows];
   if (allWl.length) {
-    // Chunk the existence check so the IN clause stays under URL limits.
+    // Chunk the existence check to avoid large IN clauses.
     const existingSet = new Set<string>();
     const candidateEmails = allWl.map(w => w.email);
     const CHUNK = 200;
@@ -510,7 +515,7 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
       const { data, error } = await admin.from('staff_whitelist')
         .select('email').in('email', batch);
       if (error) throw new Error(`staff_whitelist lookup failed: ${error.message}`);
-      for (const row of (data ?? [])) existingSet.add(String(row.email).toLowerCase());
+      for (const row of data ?? []) existingSet.add(String(row.email).toLowerCase());
     }
     const newRows = allWl.filter(w => !existingSet.has(w.email));
     if (newRows.length) {
@@ -526,13 +531,16 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
   return {
     staffAdded: whitelistAdded,
     droppedStudentEnrollments,
+    droppedStudentMissingStudent,
+    droppedStudentMissingSection,
+    droppedStudentMissingBoth,
     droppedTeacherAssignments,
+    droppedTeacherMissingTeacher,
+    droppedTeacherMissingSection,
+    droppedTeacherMissingBoth,
   };
 }
 
-// --------------------------------------------------------------------------
-// Record a sync run
-// --------------------------------------------------------------------------
 async function recordSyncRun(admin: any, p: {
   status: string; source: string; actorEmail: string | null;
   error: string | null; row_counts: Record<string, number>;
@@ -551,8 +559,6 @@ async function recordSyncRun(admin: any, p: {
   return data ?? null;
 }
 
-// Build the first full URL for each collection — useful in sync_runs.details
-// to debug empty responses.
 function sampleUrls(baseUrl: string): string[] {
   const [baseRoot, baseQuery = ''] = baseUrl.split('?');
   const basePathRooted = baseRoot.replace(/\/+$/, '');
