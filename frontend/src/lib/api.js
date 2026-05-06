@@ -162,11 +162,11 @@ export async function listTeachers(campusId = null) {
     const all = store().teachers;
     return campusId ? all.filter(t => t.campus_id === campusId) : all;
   }
-  let q = supabase.from("teachers").select("*").order("last_name");
-  if (campusId) q = q.eq("campus_id", campusId);
-  const { data, error } = await q;
-  if (error) throw error;
-  return data || [];
+  return await fetchAllPages("teachers", q => {
+    let qq = q.select("*").order("last_name");
+    if (campusId) qq = qq.eq("campus_id", campusId);
+    return qq;
+  });
 }
 
 export async function listStudents(campusId = null) {
@@ -174,11 +174,29 @@ export async function listStudents(campusId = null) {
     const all = store().students;
     return campusId ? all.filter(s => s.campus_id === campusId) : all;
   }
-  let q = supabase.from("students").select("*").order("last_name");
-  if (campusId) q = q.eq("campus_id", campusId);
-  const { data, error } = await q;
-  if (error) throw error;
-  return data || [];
+  return await fetchAllPages("students", q => {
+    let qq = q.select("*").order("last_name");
+    if (campusId) qq = qq.eq("campus_id", campusId);
+    return qq;
+  });
+}
+
+// Pull every row from a Supabase REST query, page by page. Supabase caps a
+// single response at 1000 rows by default; without paging the Users page
+// silently shows "Students (1000)" even when there are more.
+async function fetchAllPages(tableName, build) {
+  const PAGE = 1000;
+  const out = [];
+  for (let from = 0; ; from += PAGE) {
+    const to = from + PAGE - 1;
+    const q = build(supabase.from(tableName)).range(from, to);
+    const { data, error } = await q;
+    if (error) throw error;
+    const batch = data || [];
+    out.push(...batch);
+    if (batch.length < PAGE) break;
+  }
+  return out;
 }
 
 // Per-campus active-student/teacher counts. Uses HEAD requests with
@@ -370,11 +388,11 @@ export async function listSchoolYears() {
 
 export async function listStaff(campusId) {
   if (isDemoMode) return [];
-  let q = supabase.from("staff").select("*").order("last_name", { ascending: true });
-  if (campusId) q = q.eq("campus_id", campusId);
-  const { data, error } = await q;
-  if (error) throw error;
-  return data || [];
+  return await fetchAllPages("staff", q => {
+    let qq = q.select("*").order("last_name", { ascending: true });
+    if (campusId) qq = qq.eq("campus_id", campusId);
+    return qq;
+  });
 }
 
 export async function getSettings() {
