@@ -204,7 +204,7 @@ async function fetchAll(baseUrl: string, token: string) {
 // Mapping
 // --------------------------------------------------------------------------
 function mapOneRosterToOperational(d: Record<string, any[]>) {
-  const counts = { orgs: 0, sessions: 0, courses: 0, classes: 0, users: 0, students: 0, teachers: 0, enrollments: 0, demographics: 0 };
+  const counts = { orgs: 0, sessions: 0, courses: 0, classes: 0, users: 0, students: 0, teachers: 0, staff: 0, enrollments: 0, demographics: 0 };
 
   const campuses = (d.orgs ?? []).filter(o => {
     const t = String(o.type || o.orgType || '').toLowerCase();
@@ -253,6 +253,7 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
 
   const students: any[] = [];
   const teachers: any[] = [];
+  const staff: any[] = [];
   for (const u of (d.users ?? [])) {
     // Item 1: Only pull active users
     const userStatus = String(u.status || 'active').toLowerCase();
@@ -279,21 +280,39 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
         student_id: u.identifier || u.username || u.sourcedId,
         first_name: u.givenName, last_name: u.familyName,
         email: u.email, grade_level: parseInt(u.grades || u.grade || '9', 10) || null,
-        primary_org_sourced_id: primaryOrgSourcedId,  // temp, resolved to campus_id after campus upsert
-        is_active: (u.status || 'active').toLowerCase() === 'active',
+        primary_org_sourced_id: primaryOrgSourcedId,
+        is_active: true,
       });
     } else if (roleStrs.some(r => r === 'teacher' || r === 'aide')) {
+      // Clever-style: anyone with a teaching role is a teacher.
       teachers.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
-        primary_org_sourced_id: primaryOrgSourcedId,  // temp, same as above
-        is_active: (u.status || 'active').toLowerCase() === 'active',
+        primary_org_sourced_id: primaryOrgSourcedId,
+        is_active: true,
+      });
+    } else {
+      // Everyone else with a non-empty role = staff (principals, asst.
+      // principals, academic coaches, district office, proctors, counselors).
+      // Skip explicit non-school roles.
+      const nonStaff = new Set(['parent', 'guardian', 'relative', '']);
+      const primaryRole = roleStrs.find(r => !nonStaff.has(r)) || null;
+      if (!primaryRole) continue;
+
+      staff.push({
+        oneroster_user_sourced_id: u.sourcedId,
+        first_name: u.givenName, last_name: u.familyName, email: u.email,
+        primary_org_sourced_id: primaryOrgSourcedId,
+        oneroster_role: primaryRole,
+        title: u.title || null,
+        is_active: true,
       });
     }
   }
   counts.users = (d.users ?? []).length;
   counts.students = students.length;
   counts.teachers = teachers.length;
+  counts.staff = staff.length;
 
   const student_enrollments: any[] = [];
   const teacher_class_assignments: any[] = [];
@@ -314,7 +333,7 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   counts.demographics = (d.demographics ?? []).length;
 
   return {
-    records: { campuses, school_years, terms, courses, course_sections, students, teachers, student_enrollments, teacher_class_assignments },
+    records: { campuses, school_years, terms, courses, course_sections, students, teachers, staff, student_enrollments, teacher_class_assignments },
     counts,
   };
 }
@@ -342,7 +361,7 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     for (const row of (data ?? [])) campusMap.set(row.oneroster_org_sourced_id, row.id);
   }
 
-  // Attach campus_id to teachers/students, then strip temp field
+  // Attach campus_id to teachers/students/staff, then strip temp field
   for (const t of r.teachers ?? []) {
     if (t.primary_org_sourced_id && campusMap.has(t.primary_org_sourced_id)) {
       t.campus_id = campusMap.get(t.primary_org_sourced_id);
@@ -355,6 +374,12 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     }
     delete s.primary_org_sourced_id;
   }
+  for (const st of r.staff ?? []) {
+    if (st.primary_org_sourced_id && campusMap.has(st.primary_org_sourced_id)) {
+      st.campus_id = campusMap.get(st.primary_org_sourced_id);
+    }
+    delete st.primary_org_sourced_id;
+  }
 
   // 3) Remaining tables in dependency order
   const batches: [string, any[], string][] = [
@@ -363,6 +388,7 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     ['courses',                  r.courses,                  'oneroster_course_sourced_id'],
     ['course_sections',          r.course_sections,          'oneroster_class_sourced_id'],
     ['teachers',                 r.teachers,                 'oneroster_user_sourced_id'],
+    ['staff',                    r.staff,                    'oneroster_user_sourced_id'],
     ['students',                 r.students,                 'oneroster_user_sourced_id'],
     ['student_enrollments',      r.student_enrollments,      'oneroster_enrollment_sourced_id'],
     ['teacher_class_assignments',r.teacher_class_assignments,'oneroster_enrollment_sourced_id'],
@@ -377,14 +403,23 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     }
   }
 
-  // 4) Auto-populate staff_whitelist from teachers with emails. This lets them
-  //    sign in via Microsoft SSO immediately. We only insert rows that don't
-  //    already exist (ON CONFLICT DO NOTHING) so manual role upgrades are safe.
+  // 4) Auto-populate staff_whitelist for SSO. We only insert rows that
+  //    don't already exist so manual role upgrades are preserved.
+  //
+  //    a) Every teacher with an email becomes a `teacher` whitelist row.
+  //    b) Administrative staff get auto-whitelisted with the matching app role:
+  //         districtAdministrator -> district_admin
+  //         siteAdministrator     -> campus_admin
+  //         administrator         -> campus_admin
+  //       Other staff (counselor, academicCoach, proctor, etc.) sync into the
+  //       staff table for visibility but DO NOT get auto-SSO access — a super
+  //       admin must grant access manually on Integrations -> Staff Access.
+  let whitelistAdded = 0;
+
+  // Teachers
   const teachersWithEmail = (r.teachers ?? []).filter((t: any) => t.email && t.is_active);
-  let staffAdded = 0;
+  let teacherWlRows: any[] = [];
   if (teachersWithEmail.length) {
-    // Look up internal teacher_id for each oneroster_user_sourced_id so the
-    // whitelist row can deep-link.
     const { data: tRows, error: tErr } = await admin.from('teachers')
       .select('id, oneroster_user_sourced_id, email, campus_id')
       .in('oneroster_user_sourced_id', teachersWithEmail.map((t: any) => t.oneroster_user_sourced_id));
@@ -392,42 +427,62 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     const teacherByOr = new Map<string, any>();
     for (const tr of tRows ?? []) teacherByOr.set(tr.oneroster_user_sourced_id, tr);
 
-    const whitelistRows = teachersWithEmail
+    teacherWlRows = teachersWithEmail
       .map((t: any) => {
-        const dbTeacher = teacherByOr.get(t.oneroster_user_sourced_id);
-        if (!dbTeacher || !dbTeacher.email) return null;
+        const dbT = teacherByOr.get(t.oneroster_user_sourced_id);
+        if (!dbT?.email) return null;
         return {
-          email: dbTeacher.email.toLowerCase(),
+          email: dbT.email.toLowerCase(),
           role: 'teacher',
-          campus_id: dbTeacher.campus_id ?? null,
-          teacher_id: dbTeacher.id,
+          campus_id: dbT.campus_id ?? null,
+          teacher_id: dbT.id,
           tenant_hint: 'oneroster_auto',
         };
       })
       .filter(Boolean) as any[];
+  }
 
-    if (whitelistRows.length) {
-      // Filter out emails that already exist in the whitelist (case-insensitive)
-      // so we never overwrite a manual role upgrade (e.g. teacher → campus_admin).
-      const candidateEmails = whitelistRows.map(w => w.email);
-      const { data: existing, error: exErr } = await admin.from('staff_whitelist')
-        .select('email').in('email', candidateEmails);
-      if (exErr) throw new Error(`staff_whitelist lookup failed: ${exErr.message}`);
-      const existingSet = new Set((existing ?? []).map((e: any) => e.email.toLowerCase()));
-      const newRows = whitelistRows.filter(w => !existingSet.has(w.email));
+  // Administrative staff
+  const adminRoleMap: Record<string, string> = {
+    districtadministrator: 'district_admin',
+    siteadministrator:     'campus_admin',
+    administrator:         'campus_admin',
+  };
+  const adminStaff = (r.staff ?? []).filter((s: any) =>
+    s.email && s.is_active && adminRoleMap[String(s.oneroster_role || '').toLowerCase()]
+  );
+  let staffWlRows: any[] = [];
+  if (adminStaff.length) {
+    staffWlRows = adminStaff.map((s: any) => ({
+      email: s.email.toLowerCase(),
+      role: adminRoleMap[String(s.oneroster_role).toLowerCase()],
+      campus_id: s.campus_id ?? null,
+      teacher_id: null,
+      tenant_hint: 'oneroster_auto',
+    }));
+  }
 
-      if (newRows.length) {
-        const CHUNK = 500;
-        for (let i = 0; i < newRows.length; i += CHUNK) {
-          const { error } = await admin.from('staff_whitelist')
-            .insert(newRows.slice(i, i + CHUNK));
-          if (error) throw new Error(`staff_whitelist insert failed: ${error.message}`);
-        }
-        staffAdded = newRows.length;
+  const allWl = [...teacherWlRows, ...staffWlRows];
+  if (allWl.length) {
+    const candidateEmails = allWl.map(w => w.email);
+    const { data: existing, error: exErr } = await admin.from('staff_whitelist')
+      .select('email').in('email', candidateEmails);
+    if (exErr) throw new Error(`staff_whitelist lookup failed: ${exErr.message}`);
+    const existingSet = new Set((existing ?? []).map((e: any) => e.email.toLowerCase()));
+    const newRows = allWl.filter(w => !existingSet.has(w.email));
+
+    if (newRows.length) {
+      const CHUNK = 500;
+      for (let i = 0; i < newRows.length; i += CHUNK) {
+        const { error } = await admin.from('staff_whitelist')
+          .insert(newRows.slice(i, i + CHUNK));
+        if (error) throw new Error(`staff_whitelist insert failed: ${error.message}`);
       }
+      whitelistAdded = newRows.length;
     }
   }
-  return { staffAdded };
+
+  return { staffAdded: whitelistAdded };
 }
 
 // --------------------------------------------------------------------------

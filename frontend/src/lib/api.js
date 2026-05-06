@@ -182,6 +182,15 @@ export async function listSchoolYears() {
   return data || [];
 }
 
+export async function listStaff(campusId) {
+  if (isDemoMode) return [];
+  let q = supabase.from("staff").select("*").order("last_name", { ascending: true });
+  if (campusId) q = q.eq("campus_id", campusId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
 export async function getSettings() {
   if (isDemoMode) return store().app_settings;
   const { data, error } = await supabase.from("app_settings").select("*").eq("id", 1).maybeSingle();
