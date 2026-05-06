@@ -125,6 +125,36 @@ export async function listStudents(campusId = null) {
   return data || [];
 }
 
+// Per-campus active-student/teacher counts. Uses HEAD requests with
+// `count: 'exact'` so we get accurate totals regardless of dataset size
+// (Supabase's default `.select('*')` caps a single response at 1000 rows
+// which silently truncated the Campuses page totals).
+export async function getCampusCounts() {
+  if (isDemoMode) {
+    const s = store();
+    return s.campuses.map(c => ({
+      campus_id: c.id,
+      students: s.students.filter(x => x.campus_id === c.id && x.is_active !== false).length,
+      teachers: s.teachers.filter(x => x.campus_id === c.id && x.is_active !== false).length,
+    }));
+  }
+  const { data: campuses, error: cErr } = await supabase
+    .from("campuses").select("id");
+  if (cErr) throw cErr;
+  const out = await Promise.all((campuses || []).map(async c => {
+    const [{ count: students }, { count: teachers }] = await Promise.all([
+      supabase.from("students")
+        .select("id", { count: "exact", head: true })
+        .eq("campus_id", c.id).eq("is_active", true),
+      supabase.from("teachers")
+        .select("id", { count: "exact", head: true })
+        .eq("campus_id", c.id).eq("is_active", true),
+    ]);
+    return { campus_id: c.id, students: students ?? 0, teachers: teachers ?? 0 };
+  }));
+  return out;
+}
+
 export async function listTests() {
   if (isDemoMode) return store().tests;
   const { data, error } = await supabase.from("tests").select("*").order("name");

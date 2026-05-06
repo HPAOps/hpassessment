@@ -3,22 +3,24 @@ import AppShell, { PageHeader } from "@/components/Layout/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { listCampuses, listStudents, listTeachers } from "@/lib/api";
+import { listCampuses, getCampusCounts } from "@/lib/api";
 
 export default function Campuses() {
   const [campuses, setCampuses] = useState([]);
-  const [students, setStudents] = useState([]);
-  const [teachers, setTeachers] = useState([]);
+  const [counts, setCounts] = useState({}); // { [campus_id]: { students, teachers } }
 
   useEffect(() => {
     listCampuses().then(setCampuses);
-    listStudents().then(setStudents);
-    listTeachers().then(setTeachers);
+    getCampusCounts().then(rows => {
+      const m = {};
+      for (const r of rows) m[r.campus_id] = { students: r.students, teachers: r.teachers };
+      setCounts(m);
+    });
   }, []);
 
   return (
     <AppShell>
-      <PageHeader title="Campuses" subtitle="Operational campus records mapped from OneRoster orgs." />
+      <PageHeader title="Campuses" subtitle="Operational campus records mapped from OneRoster orgs. Counts reflect active students and teachers only." />
       <Card>
         <CardContent className="p-0">
           <Table>
@@ -32,8 +34,8 @@ export default function Campuses() {
                   <TableCell className="font-medium">{c.name}</TableCell>
                   <TableCell className="font-mono text-xs">{c.code}</TableCell>
                   <TableCell className="font-mono text-xs">{c.oneroster_org_sourced_id}</TableCell>
-                  <TableCell className="text-center">{students.filter(s => s.campus_id === c.id).length}</TableCell>
-                  <TableCell className="text-center">{teachers.filter(t => t.campus_id === c.id).length}</TableCell>
+                  <TableCell className="text-center" data-testid={`campus-${c.id}-students`}>{counts[c.id]?.students ?? "…"}</TableCell>
+                  <TableCell className="text-center" data-testid={`campus-${c.id}-teachers`}>{counts[c.id]?.teachers ?? "…"}</TableCell>
                   <TableCell><Badge variant={c.is_active ? "secondary" : "outline"}>{c.is_active ? "Active" : "Inactive"}</Badge></TableCell>
                 </TableRow>
               ))}
