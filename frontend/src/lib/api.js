@@ -650,8 +650,29 @@ export async function updateTest(testId, patch, actor) {
     persist();
     return t;
   }
-  const { data, error } = await supabase.from("tests").update(patch).eq("id", testId).select("*").single();
+  // Extract join-table updates if provided so they don't get sent to the
+  // tests.update() (which would 404 on unknown column).
+  const { course_ids, ...rest } = patch;
+  const payload = { ...rest };
+  if (Array.isArray(course_ids) && course_ids.length) {
+    payload.course_id = course_ids[0]; // legacy single-course pointer
+  }
+  const { data, error } = await supabase.from("tests").update(payload).eq("id", testId).select("*").single();
   if (error) throw error;
+
+  // Sync the test_courses join table to exactly course_ids if provided.
+  // Simplest reliable strategy: delete all existing links, then insert the
+  // new set. Cheap (typically 1-3 rows per test).
+  if (Array.isArray(course_ids)) {
+    const { error: delErr } = await supabase.from("test_courses").delete().eq("test_id", testId);
+    if (delErr) throw delErr;
+    if (course_ids.length) {
+      const linkRows = course_ids.map(cid => ({ test_id: testId, course_id: cid }));
+      const { error: upErr } = await supabase.from("test_courses").insert(linkRows);
+      if (upErr) throw upErr;
+    }
+  }
+
   addAudit(actor, "test.updated", testId, patch);
   return data;
 }

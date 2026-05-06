@@ -6,7 +6,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { listSectionsScoped } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 import { ArrowRight, Search, Loader2 } from "lucide-react";
 
 function teacherLabel(teachers) {
@@ -16,9 +18,12 @@ function teacherLabel(teachers) {
 }
 
 export default function Sections() {
+  const { staff } = useAuth();
+  const isSuper = staff?.role === "super_admin";
   const [rows, setRows] = useState(null); // null = loading
   const [error, setError] = useState(null);
   const [q, setQ] = useState("");
+  const [campusFilter, setCampusFilter] = useState("all");
 
   useEffect(() => {
     let alive = true;
@@ -28,25 +33,40 @@ export default function Sections() {
     return () => { alive = false; };
   }, []);
 
+  // Distinct campuses present in the visible row set, alphabetised.
+  const campusOptions = useMemo(() => {
+    if (!rows) return [];
+    const m = new Map();
+    for (const r of rows) {
+      if (r.campus?.id && !m.has(r.campus.id)) m.set(r.campus.id, r.campus.name || "—");
+    }
+    return [...m.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [rows]);
+
   const filtered = useMemo(() => {
     if (!rows) return [];
     const term = q.trim().toLowerCase();
-    if (!term) return rows;
-    return rows.filter(r =>
-      (r.section_code || "").toLowerCase().includes(term) ||
-      (r.course?.title || "").toLowerCase().includes(term) ||
-      (r.course?.code || "").toLowerCase().includes(term) ||
-      (r.campus?.name || "").toLowerCase().includes(term) ||
-      (r.teachers || []).some(t => `${t.first_name ?? ""} ${t.last_name ?? ""}`.toLowerCase().includes(term))
-    );
-  }, [rows, q]);
+    return rows.filter(r => {
+      if (isSuper && campusFilter !== "all" && r.campus?.id !== campusFilter) return false;
+      if (!term) return true;
+      return (
+        (r.section_code || "").toLowerCase().includes(term) ||
+        (r.course?.title || "").toLowerCase().includes(term) ||
+        (r.course?.code || "").toLowerCase().includes(term) ||
+        (r.campus?.name || "").toLowerCase().includes(term) ||
+        (r.teachers || []).some(t => `${t.first_name ?? ""} ${t.last_name ?? ""}`.toLowerCase().includes(term))
+      );
+    });
+  }, [rows, q, campusFilter, isSuper]);
 
   return (
     <AppShell>
       <PageHeader title="Sections" subtitle="Course sections you can access. Click any section to see its roster." />
 
-      <div className="mb-4 flex items-center gap-2 max-w-md">
-        <div className="relative flex-1">
+      <div className="mb-4 flex items-center gap-2 flex-wrap max-w-3xl">
+        <div className="relative flex-1 min-w-[260px]">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             data-testid="sections-search"
@@ -56,6 +76,21 @@ export default function Sections() {
             className="pl-9"
           />
         </div>
+
+        {isSuper && campusOptions.length > 1 && (
+          <Select value={campusFilter} onValueChange={setCampusFilter}>
+            <SelectTrigger className="w-[220px]" data-testid="sections-campus-filter">
+              <SelectValue placeholder="Filter by campus" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" data-testid="sections-campus-all">All campuses</SelectItem>
+              {campusOptions.map(c => (
+                <SelectItem key={c.id} value={c.id} data-testid={`sections-campus-${c.id}`}>{c.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
         <span className="text-sm text-muted-foreground" data-testid="sections-count">
           {rows ? `${filtered.length} of ${rows.length}` : "…"}
         </span>

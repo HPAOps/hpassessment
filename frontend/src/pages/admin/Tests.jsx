@@ -26,6 +26,7 @@ export default function Tests() {
   const [testCourses, setTestCourses] = useState([]);
   const [schoolYears, setSchoolYears] = useState([]);
   const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(null); // test row being edited
 
   async function refresh() {
     const [t, c, s, tc, sy] = await Promise.all([
@@ -71,6 +72,18 @@ export default function Tests() {
     } catch (e) {
       const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
       toast.error("Could not create test: " + msg);
+    }
+  }
+
+  async function onSaveEdit(payload) {
+    try {
+      await updateTest(editing.id, payload, staff?.email);
+      toast.success("Test updated");
+      setEditing(null);
+      refresh();
+    } catch (e) {
+      const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
+      toast.error("Could not update test: " + msg);
     }
   }
 
@@ -174,6 +187,9 @@ export default function Tests() {
                       <Button asChild variant="ghost" size="sm" data-testid={`edit-key-${t.id}`}>
                         <Link to={`/admin/answer-keys?test=${t.id}`}><Pencil className="h-3.5 w-3.5" /> Key</Link>
                       </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setEditing(t)} data-testid={`edit-test-${t.id}`}>
+                        <Pencil className="h-3.5 w-3.5" /> Edit
+                      </Button>
                       {isSuper && (
                         <Button variant="ghost" size="sm" onClick={() => onDelete(t)} data-testid={`delete-test-${t.id}`} className="text-[hsl(var(--destructive))] hover:text-[hsl(var(--destructive))]">
                           <Trash2 className="h-3.5 w-3.5" />
@@ -190,6 +206,19 @@ export default function Tests() {
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={!!editing} onOpenChange={o => { if (!o) setEditing(null); }}>
+        {editing && (
+          <EditTestDialog
+            test={editing}
+            courses={courses}
+            sectionsByCourse={sectionsByCourse}
+            currentCourseIds={courseIdsByTest.get(editing.id) || []}
+            onSubmit={onSaveEdit}
+            onCancel={() => setEditing(null)}
+          />
+        )}
+      </Dialog>
     </AppShell>
   );
 }
@@ -197,6 +226,87 @@ export default function Tests() {
 function fmtWindow(open, close) {
   if (!open && !close) return <span className="italic">not set</span>;
   return <>{open || "—"} → {close || "—"}</>;
+}
+
+// Stored-date columns are `timestamptz` but the form uses <input type="date">,
+// so we format yyyy-mm-dd in/out. Empty-string -> null.
+function isoToDateInput(v) {
+  if (!v) return "";
+  return String(v).slice(0, 10);
+}
+
+function EditTestDialog({ test, courses, sectionsByCourse, currentCourseIds, onSubmit, onCancel }) {
+  const [name, setName] = useState(test.name || "");
+  const [course_ids, setCourseIds] = useState(currentCourseIds);
+  const [boc_opens_at, setBocOpens] = useState(isoToDateInput(test.boc_opens_at));
+  const [boc_closes_at, setBocCloses] = useState(isoToDateInput(test.boc_closes_at));
+  const [eoc_opens_at, setEocOpens] = useState(isoToDateInput(test.eoc_opens_at));
+  const [eoc_closes_at, setEocCloses] = useState(isoToDateInput(test.eoc_closes_at));
+
+  const totalSections = course_ids.reduce(
+    (sum, cid) => sum + (sectionsByCourse?.get(cid)?.length || 0), 0
+  );
+
+  return (
+    <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogHeader>
+        <DialogTitle className="font-display">Edit test</DialogTitle>
+        <DialogDescription>
+          Adjust the BOC / EOC date windows, rename the test, or change which courses it applies to. Existing student attempts are not affected.
+        </DialogDescription>
+      </DialogHeader>
+      <div className="space-y-4">
+        <div className="space-y-2">
+          <Label>Test name</Label>
+          <Input
+            value={name} onChange={e=>setName(e.target.value)}
+            data-testid="edit-test-name"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label>Courses</Label>
+          <CourseMultiSelect courses={courses} value={course_ids} onChange={setCourseIds} testid="edit-test-courses" />
+          {course_ids.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Will apply to <strong>{totalSections}</strong> section{totalSections === 1 ? "" : "s"} across the selected courses.
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-md border border-border p-3 space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">BOC window — beginning of course</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label className="text-xs">Opens</Label><Input type="date" value={boc_opens_at} onChange={e=>setBocOpens(e.target.value)} data-testid="edit-boc-opens" /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Closes</Label><Input type="date" value={boc_closes_at} onChange={e=>setBocCloses(e.target.value)} data-testid="edit-boc-closes" /></div>
+          </div>
+        </div>
+        <div className="rounded-md border border-border p-3 space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">EOC window — end of course</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label className="text-xs">Opens</Label><Input type="date" value={eoc_opens_at} onChange={e=>setEocOpens(e.target.value)} data-testid="edit-eoc-opens" /></div>
+            <div className="space-y-1.5"><Label className="text-xs">Closes</Label><Input type="date" value={eoc_closes_at} onChange={e=>setEocCloses(e.target.value)} data-testid="edit-eoc-closes" /></div>
+          </div>
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onCancel} data-testid="edit-test-cancel">Cancel</Button>
+        <Button
+          onClick={() => onSubmit({
+            name,
+            course_ids,
+            boc_opens_at: boc_opens_at || null,
+            boc_closes_at: boc_closes_at || null,
+            eoc_opens_at: eoc_opens_at || null,
+            eoc_closes_at: eoc_closes_at || null,
+          })}
+          disabled={!name || course_ids.length === 0}
+          data-testid="edit-test-submit"
+        >
+          Save changes
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
 }
 
 function NewTestDialog({ courses, sectionsByCourse, schoolYears, onSubmit }) {
