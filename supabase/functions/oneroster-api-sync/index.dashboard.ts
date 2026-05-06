@@ -110,7 +110,18 @@ Deno.serve(async (req: Request) => {
     const warnings: string[] = [];
     if (!row_counts.orgs)  warnings.push('no orgs returned');
     if (!row_counts.users) warnings.push('no users returned');
-    if (dropped.droppedStudentEnrollments) warnings.push(`${dropped.droppedStudentEnrollments} student enrollments not linked`);
+    // `missing_student`-only drops are an upstream OneRoster data-quality
+    // artifact (enrollments referencing user sourcedIds that the /users
+    // endpoint never emitted). Clever silently swallows these too; we keep
+    // the count in row_counts for diagnostics but DON'T mark the run partial
+    // because of them. Real problems still warn.
+    const studentDropsAreOnlyMissingStudent =
+      dropped.droppedStudentEnrollments > 0
+      && dropped.droppedStudentMissingStudent === dropped.droppedStudentEnrollments
+      && !dropped.droppedStudentMissingSection && !dropped.droppedStudentMissingBoth;
+    if (dropped.droppedStudentEnrollments && !studentDropsAreOnlyMissingStudent) {
+      warnings.push(`${dropped.droppedStudentEnrollments} student enrollments not linked`);
+    }
     if (dropped.droppedTeacherAssignments) warnings.push(`${dropped.droppedTeacherAssignments} teacher assignments not linked`);
 
     const runId = await recordSyncRun(admin, {

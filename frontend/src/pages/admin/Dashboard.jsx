@@ -257,7 +257,10 @@ function RosterSyncBanner({ run, role }) {
       ? "border-[hsl(var(--destructive))]/40"
       : "border-[hsl(var(--warning))]/40";
   const counts = run.row_counts || {};
-  const countSummary = Object.entries(counts).slice(0, 4).map(([k, v]) => `${v} ${k}`).join(" · ");
+  const summaryCounts = Object.entries(counts).filter(([k]) =>
+    !k.startsWith("dropped_") && k !== "rescued_students" && k !== "whitelist_added"
+  );
+  const countSummary = summaryCounts.slice(0, 4).map(([k, v]) => `${v} ${k}`).join(" · ");
   const when = new Date(run.completed_at || run.started_at);
   const ago = relTime(when);
 

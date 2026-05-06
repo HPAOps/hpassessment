@@ -205,7 +205,12 @@ function LastSyncRow({ run }) {
       ? "text-[hsl(var(--destructive))]"
       : "text-[hsl(var(--warning))]";
   const counts = run.row_counts || {};
-  const countSummary = Object.entries(counts).slice(0, 4).map(([k, v]) => `${v} ${k}`).join(" · ");
+  // Hide diagnostic-only counters from the at-a-glance summary; they're just
+  // noise. The real warnings are surfaced via run.error_message.
+  const summaryCounts = Object.entries(counts).filter(([k]) =>
+    !k.startsWith("dropped_") && k !== "rescued_students" && k !== "whitelist_added"
+  );
+  const countSummary = summaryCounts.slice(0, 4).map(([k, v]) => `${v} ${k}`).join(" · ");
   return (
     <div className="mt-3 rounded-md border border-border bg-muted/30 p-3" data-testid={`last-sync-${run.category}`}>
       <div className="flex items-center justify-between gap-3">
@@ -250,7 +255,10 @@ function RecentRunsTable({ runs }) {
           <TableBody>
             {runs.map(r => {
               const counts = r.row_counts || {};
-              const countSummary = Object.entries(counts).slice(0, 3).map(([k, v]) => `${v} ${k}`).join(" · ");
+              const summaryCounts = Object.entries(counts).filter(([k]) =>
+                !k.startsWith("dropped_") && k !== "rescued_students" && k !== "whitelist_added"
+              );
+              const countSummary = summaryCounts.slice(0, 3).map(([k, v]) => `${v} ${k}`).join(" · ");
               return (
                 <TableRow key={r.id}>
                   <TableCell className="font-mono text-xs whitespace-nowrap">{new Date(r.completed_at || r.started_at).toLocaleString()}</TableCell>
