@@ -1,9 +1,12 @@
 // ==========================================================================
 // HPA -- OneRoster v1.2 REST API sync  (Supabase Edge Function)
-// v9: multi-candidate campus resolution (enrollments -> primary role org ->
-// other roles -> primaryOrg -> orgs[]). First candidate matching a synced
-// campus wins. Plus a rescue pass that re-classifies guardian/relative
-// users as students when an enrollment with role='student' references them.
+// v10: process tobedeleted users (with is_active=false) so their enrollments
+// link instead of being silently dropped. Always emits `rescued_students`
+// in row_counts so we know the rescue pass ran. Dumps a deterministic
+// diagnostics object into sync_runs.details (status_breakdown,
+// campus_resolution: {students_no_candidates, students_no_candidate_match,
+// orphan_students_sample, orphan_candidate_sid_counts, ...}) so we can
+// see exactly why students lose campus_id without guessing.
 // ==========================================================================
 
 // deno-lint-ignore-file no-explicit-any
@@ -120,6 +123,8 @@ Deno.serve(async (req: Request) => {
         started_at: startedAt, base_url: baseUrl,
         sample_urls: sampleUrls(baseUrl),
         role_breakdown: mapped.roleStats || {},
+        status_breakdown: mapped.statusStats || {},
+        campus_resolution: dropped.diagnostics || {},
       },
     });
 
@@ -316,11 +321,13 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   const teachers: any[] = [];
   const staff: any[] = [];
   const roleStats: Record<string, number> = {};
+  const statusStats: Record<string, number> = {};
   for (const u of (d.users ?? [])) {
     const userStatus = String(u.status || 'active').toLowerCase();
-    // Only skip rows OneRoster has flagged for deletion. We still upsert
-    // 'inactive' users (with is_active=false) so their enrollments link.
-    if (userStatus === 'tobedeleted') continue;
+    statusStats[userStatus || '(none)'] = (statusStats[userStatus || '(none)'] || 0) + 1;
+    // Process every status — tobedeleted users still get upserted with
+    // is_active=false so their enrollments link. (Earlier we skipped them
+    // and that orphaned ~1419 enrollments referencing tobedeleted students.)
     const isUserActive = userStatus === 'active';
 
     const roles = Array.isArray(u.roles) ? u.roles : [];
@@ -412,7 +419,8 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
     if (!enrolledStudentSids.has(sid)) continue;
     if (studentSidSet.has(sid)) continue;
     const userStatus = String(u.status || 'active').toLowerCase();
-    if (userStatus === 'tobedeleted') continue;
+    // Process all statuses including 'tobedeleted' — they still have active
+    // enrollments referencing them and we want those to link.
 
     const roles = Array.isArray(u.roles) ? u.roles : [];
     const primaryEntry =
@@ -442,7 +450,8 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   counts.students = students.length;
   counts.teachers = teachers.length;
   counts.staff = staff.length;
-  if (rescuedAsStudents) (counts as any).rescued_students = rescuedAsStudents;
+  // Always surface rescued_students (even 0) so we know the rescue pass ran.
+  (counts as any).rescued_students = rescuedAsStudents;
 
   const student_enrollments: any[] = [];
   const teacher_class_assignments: any[] = [];
@@ -474,6 +483,7 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
     records: { campuses, school_years, terms, courses, course_sections, students, teachers, staff, student_enrollments, teacher_class_assignments },
     counts,
     roleStats,
+    statusStats,
   };
 }
 
@@ -512,14 +522,54 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     }
     return undefined;
   };
+
+  // Diagnostic counters so we can see *why* a student ends up with no
+  // campus. (Stored back into sync_runs.details for inspection.)
+  let studentsNoCandidates = 0;
+  let studentsNoCandidateMatch = 0;
+  let studentsResolvedFromEnroll = 0;
+  let studentsResolvedFromOrgRefs = 0;
+  const orphanStudentsSample: Array<Record<string, any>> = [];
+  const orphanCandidateSidCounts: Record<string, number> = {};
+
   for (const t of r.teachers ?? []) {
     const cid = pickCampus(t._or_candidate_org_sids);
     if (cid) t.campus_id = cid;
     delete t._or_candidate_org_sids;
   }
   for (const s of r.students ?? []) {
-    const cid = pickCampus(s._or_candidate_org_sids);
-    if (cid) s.campus_id = cid;
+    const sids: string[] = s._or_candidate_org_sids || [];
+    const cid = pickCampus(sids);
+    if (cid) {
+      s.campus_id = cid;
+      // Track WHICH candidate slot won (enrollment vs other) so we can see
+      // which fallback path is doing the heavy lifting.
+      if (sids[0] && campusMap.has(sids[0])) studentsResolvedFromEnroll++;
+      else studentsResolvedFromOrgRefs++;
+    } else if (sids.length === 0) {
+      studentsNoCandidates++;
+      if (orphanStudentsSample.length < 15) {
+        orphanStudentsSample.push({
+          sid: s.oneroster_user_sourced_id,
+          student_id: s.student_id,
+          name: `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim(),
+          reason: 'no_candidate_sids',
+          candidates: [],
+        });
+      }
+    } else {
+      studentsNoCandidateMatch++;
+      for (const sid of sids) orphanCandidateSidCounts[sid] = (orphanCandidateSidCounts[sid] || 0) + 1;
+      if (orphanStudentsSample.length < 15) {
+        orphanStudentsSample.push({
+          sid: s.oneroster_user_sourced_id,
+          student_id: s.student_id,
+          name: `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim(),
+          reason: 'no_match_in_campusMap',
+          candidates: sids,
+        });
+      }
+    }
     delete s._or_candidate_org_sids;
   }
   for (const st of r.staff ?? []) {
@@ -538,10 +588,12 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
   await upsertChunked(admin, 'courses', r.courses, 'oneroster_course_sourced_id', courseMap);
 
   // 4) course_sections — resolve course_id, campus_id, term_id
+  let sectionsNoCampus = 0;
   for (const cs of r.course_sections ?? []) {
     if (cs._or_course_sid && courseMap.has(cs._or_course_sid)) cs.course_id = courseMap.get(cs._or_course_sid);
     if (cs._or_school_sid && campusMap.has(cs._or_school_sid)) cs.campus_id = campusMap.get(cs._or_school_sid);
     if (cs._or_term_sid   && termMap.has(cs._or_term_sid))     cs.term_id   = termMap.get(cs._or_term_sid);
+    if (!cs.campus_id) sectionsNoCampus++;
     delete cs._or_course_sid; delete cs._or_school_sid; delete cs._or_term_sid;
   }
   const sectionMap = new Map<string, string>();
@@ -653,6 +705,17 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     droppedTeacherMissingTeacher,
     droppedTeacherMissingSection,
     droppedTeacherMissingBoth,
+    diagnostics: {
+      students_no_candidates: studentsNoCandidates,
+      students_no_candidate_match: studentsNoCandidateMatch,
+      students_resolved_from_enrollment: studentsResolvedFromEnroll,
+      students_resolved_from_org_refs: studentsResolvedFromOrgRefs,
+      sections_no_campus: sectionsNoCampus,
+      campus_map_size: campusMap.size,
+      campus_map_sids: [...campusMap.keys()],
+      orphan_candidate_sid_counts: orphanCandidateSidCounts,
+      orphan_students_sample: orphanStudentsSample,
+    },
   };
 }
 
