@@ -54,13 +54,14 @@ export default function StudentTestSelector() {
             <EmptyState icon={Lock} title="No open tests right now" description="Tests will appear here when the test window opens. Please check back later or ask your teacher." />
           )}
           {tests.map(t => {
-            const att = attempts.find(a => a.test_id === t.id);
+            const phase = t.phase || t.test_type;
+            const att = attempts.find(a => a.test_id === t.id && (a.phase || "BOC") === phase);
             const submitted = att && att.status === "submitted";
             return (
               <button
-                key={t.id}
+                key={`${t.id}-${phase}`}
                 disabled={submitted}
-                data-testid={`test-pick-${t.id}`}
+                data-testid={`test-pick-${t.id}-${phase}`}
                 onClick={() => startTest(t)}
                 className="w-full text-left rounded-lg border border-border bg-card p-5 hover:border-[hsl(var(--accent))]/50 hover:shadow-md transition-all flex items-center gap-4 disabled:opacity-60 disabled:cursor-not-allowed"
               >
@@ -69,7 +70,7 @@ export default function StudentTestSelector() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <Badge variant={t.test_type === "BOC" ? "secondary" : "default"}>{t.test_type}</Badge>
+                    <Badge variant={phase === "BOC" ? "secondary" : "default"}>{phase}</Badge>
                     {submitted && <Badge variant="outline">Already submitted</Badge>}
                     {att && !submitted && <Badge variant="outline">In progress</Badge>}
                   </div>
