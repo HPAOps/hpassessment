@@ -81,15 +81,32 @@ export async function staffSignIn(email, password) {
   }
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
-  // Profile + role lookup
-  const { data: profile } = await supabase.from("profiles").select("*").eq("id", data.user.id).maybeSingle();
+  // Profile + role lookup. If a profile is missing we MUST NOT silently
+  // assume "teacher" — that masks whitelist/profile sync bugs and gave a
+  // user the wrong sidebar in production. Self-heal from the whitelist
+  // (same path the OAuth callback uses) so the role comes from a single
+  // authoritative source.
+  let { data: profile } = await supabase
+    .from("profiles").select("*").eq("id", data.user.id).maybeSingle();
+  if (!profile) {
+    const { data: healed, error: healErr } = await supabase.rpc("ensure_profile_from_whitelist");
+    if (healErr) {
+      await supabase.auth.signOut();
+      throw new Error(healErr.message);
+    }
+    profile = healed;
+  }
+  if (!profile) {
+    await supabase.auth.signOut();
+    throw new Error("Your email is not yet authorized for HPA Growth Assessments. Please contact your district admin.");
+  }
   const session = {
     kind: "staff",
     email: data.user.email,
-    role: profile?.role || "teacher",
-    name: profile?.name || data.user.email,
-    campus_id: profile?.campus_id || null,
-    teacher_id: profile?.teacher_id || null,
+    role: profile.role,
+    name: profile.name || data.user.email,
+    campus_id: profile.campus_id || null,
+    teacher_id: profile.teacher_id || null,
   };
   localStorage.setItem(STAFF_KEY, JSON.stringify(session));
   return session;
