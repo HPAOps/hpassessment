@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getStudentAttempt, saveResponse, submitAttempt } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { toast } from "sonner";
 
 export default function StudentTest() {
   const { attemptId } = useParams();
@@ -20,18 +21,37 @@ export default function StudentTest() {
   const [idx, setIdx] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState(null);
   const lastSavedRef = useRef(Date.now());
 
   useEffect(() => {
+    let alive = true;
     (async () => {
-      const data = await getStudentAttempt(attemptId, student.id);
-      if (!data || !data.attempt) { nav("/student/courses", { replace: true }); return; }
-      if (data.attempt.status === "submitted") { nav(`/student/submitted/${data.attempt.id}`, { replace: true }); return; }
-      setAttempt(data.attempt);
-      setTest(data.test);
-      setOrderedQuestions(data.questions || []);
-      setResponses(data.responses || []);
+      try {
+        const data = await getStudentAttempt(attemptId, student.id);
+        if (!alive) return;
+        if (!data || !data.attempt) { nav("/student/courses", { replace: true }); return; }
+        if (data.attempt.status === "submitted") { nav(`/student/submitted/${data.attempt.id}`, { replace: true }); return; }
+        setAttempt(data.attempt);
+        setTest(data.test);
+        setOrderedQuestions(data.questions || []);
+        setResponses(data.responses || []);
+      } catch (e) {
+        if (!alive) return;
+        const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
+        // Most common cause: the session_secret in localStorage was cleared
+        // or never written (e.g. user reloaded the URL directly). Send them
+        // back to the test selector where startTest() will rebuild it.
+        if (/invalid or expired session/i.test(msg)) {
+          toast.error("Your test session expired. Please reopen the test from your courses.");
+          nav("/student/courses", { replace: true });
+        } else {
+          setLoadError(msg);
+          toast.error("Could not load the test: " + msg);
+        }
+      }
     })();
+    return () => { alive = false; };
   }, [attemptId, student, nav]);
 
   const currentQ = orderedQuestions[idx];
@@ -42,23 +62,51 @@ export default function StudentTest() {
   async function pick(letter) {
     if (!currentQ) return;
     setSaving(true);
-    await saveResponse(attempt.id, currentQ.id, letter);
-    setResponses(prev => {
-      const others = prev.filter(r => r.question_id !== currentQ.id);
-      return [...others, { question_id: currentQ.id, selected_answer: letter }];
-    });
-    lastSavedRef.current = Date.now();
-    setSaving(false);
+    try {
+      await saveResponse(attempt.id, currentQ.id, letter);
+      setResponses(prev => {
+        const others = prev.filter(r => r.question_id !== currentQ.id);
+        return [...others, { question_id: currentQ.id, selected_answer: letter }];
+      });
+      lastSavedRef.current = Date.now();
+    } catch (e) {
+      const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
+      toast.error("Could not save your answer: " + msg);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function onSubmit() {
-    const res = await submitAttempt(attempt.id);
-    // Server invalidates the session_secret on submit — pass the result via
-    // route state so the confirmation screen doesn't need to re-fetch.
-    nav(`/student/submitted/${res.id || attempt.id}`, {
-      replace: true,
-      state: { submittedAttempt: res, test },
-    });
+    try {
+      const res = await submitAttempt(attempt.id);
+      // Server invalidates the session_secret on submit — pass the result via
+      // route state so the confirmation screen doesn't need to re-fetch.
+      nav(`/student/submitted/${res.id || attempt.id}`, {
+        replace: true,
+        state: { submittedAttempt: res, test },
+      });
+    } catch (e) {
+      const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
+      toast.error("Could not submit your test: " + msg);
+    }
+  }
+
+  if (loadError) {
+    return (
+      <StudentShell>
+        <div className="flex-1 flex items-center justify-center px-6">
+          <div className="max-w-md text-center space-y-3">
+            <AlertTriangle className="h-10 w-10 text-amber-500 mx-auto" />
+            <h2 className="font-display text-2xl font-semibold">We couldn't load your test</h2>
+            <p className="text-sm text-muted-foreground">{loadError}</p>
+            <Button onClick={() => nav("/student/courses", { replace: true })} data-testid="loaderror-back">
+              <ArrowLeft className="h-4 w-4 mr-2" /> Back to my courses
+            </Button>
+          </div>
+        </div>
+      </StudentShell>
+    );
   }
 
   if (!attempt || !test) {
