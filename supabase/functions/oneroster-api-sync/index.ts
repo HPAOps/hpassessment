@@ -88,13 +88,17 @@ Deno.serve(async (req: Request) => {
     const accessToken = await fetchAccessToken(tokenUrl, clientId, clientSecret);
     const data = await fetchAll(baseUrl, accessToken);
     const mapped = mapOneRosterToOperational(data);
-    const { staffAdded } = await upsertMapped(admin, mapped);
+    const { staffAdded, droppedStudentEnrollments, droppedTeacherAssignments } = await upsertMapped(admin, mapped);
 
     row_counts = mapped.counts;
-    if (staffAdded) row_counts.staff_added = staffAdded;
+    if (staffAdded) row_counts.whitelist_added = staffAdded;
+    if (droppedStudentEnrollments) row_counts.dropped_student_enrollments = droppedStudentEnrollments;
+    if (droppedTeacherAssignments) row_counts.dropped_teacher_assignments = droppedTeacherAssignments;
     const warnings: string[] = [];
     if (!row_counts.orgs)  warnings.push('no orgs returned');
     if (!row_counts.users) warnings.push('no users returned');
+    if (droppedStudentEnrollments) warnings.push(`${droppedStudentEnrollments} student enrollments not linked (missing student or section)`);
+    if (droppedTeacherAssignments) warnings.push(`${droppedTeacherAssignments} teacher assignments not linked`);
 
     const runId = await recordSyncRun(admin, {
       status: warnings.length ? 'partial' : 'success',
@@ -249,9 +253,15 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   }));
   counts.courses = courses.length;
 
+  // course_sections need course_id and campus_id resolved AFTER upserts;
+  // capture the OneRoster ref ids here as temp fields.
   const course_sections = (d.classes ?? []).map(cl => ({
     oneroster_class_sourced_id: cl.sourcedId,
     section_code: cl.classCode || cl.title || cl.sourcedId,
+    is_active: (cl.status || 'active').toLowerCase() === 'active',
+    _or_course_sid: cl.course?.sourcedId || null,
+    _or_school_sid: cl.school?.sourcedId || (Array.isArray(cl.schools) ? cl.schools[0]?.sourcedId : null),
+    _or_term_sid:   Array.isArray(cl.terms) ? cl.terms[0]?.sourcedId : (cl.term?.sourcedId || null),
   }));
   counts.classes = course_sections.length;
 
@@ -329,14 +339,20 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   const teacher_class_assignments: any[] = [];
   for (const e of (d.enrollments ?? [])) {
     const role = String(e.role || '').toLowerCase();
+    const userSid  = e.user?.sourcedId  || null;
+    const classSid = e.class?.sourcedId || null;
     if (role === 'student') {
       student_enrollments.push({
         oneroster_enrollment_sourced_id: e.sourcedId,
         status: (e.status || 'active').toLowerCase(),
+        _or_user_sid:  userSid,
+        _or_class_sid: classSid,
       });
     } else if (role === 'teacher' || role === 'aide') {
       teacher_class_assignments.push({
         oneroster_enrollment_sourced_id: e.sourcedId,
+        _or_user_sid:  userSid,
+        _or_class_sid: classSid,
       });
     }
   }
@@ -393,39 +409,143 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     delete st.primary_org_sourced_id;
   }
 
-  // 3) Remaining tables in dependency order
-  const batches: [string, any[], string][] = [
-    ['school_years',             r.school_years,             'oneroster_academic_session_sourced_id'],
-    ['terms',                    r.terms,                    'oneroster_academic_session_sourced_id'],
-    ['courses',                  r.courses,                  'oneroster_course_sourced_id'],
-    ['course_sections',          r.course_sections,          'oneroster_class_sourced_id'],
-    ['teachers',                 r.teachers,                 'oneroster_user_sourced_id'],
-    ['staff',                    r.staff,                    'oneroster_user_sourced_id'],
-    ['students',                 r.students,                 'oneroster_user_sourced_id'],
-    ['student_enrollments',      r.student_enrollments,      'oneroster_enrollment_sourced_id'],
-    ['teacher_class_assignments',r.teacher_class_assignments,'oneroster_enrollment_sourced_id'],
-  ];
-  for (const [table, rows, conflict] of batches) {
-    if (!rows?.length) continue;
+  // 3) Resolve course_section FKs (course_id, campus_id, term_id) before upserting
+  const termMap = new Map<string, string>();
+  if (r.terms?.length) {
+    const { data, error } = await admin.from('terms')
+      .select('id, oneroster_academic_session_sourced_id')
+      .in('oneroster_academic_session_sourced_id', r.terms.map((t: any) => t.oneroster_academic_session_sourced_id));
+    if (error) throw new Error(`term lookup failed: ${error.message}`);
+    for (const row of (data ?? [])) termMap.set(row.oneroster_academic_session_sourced_id, row.id);
+  }
+  // school_years + terms first
+  for (const tbl of ['school_years', 'terms'] as const) {
+    if (!r[tbl]?.length) continue;
+    const { error } = await admin.from(tbl)
+      .upsert(r[tbl], { onConflict: 'oneroster_academic_session_sourced_id', ignoreDuplicates: false });
+    if (error) throw new Error(`${tbl} upsert failed: ${error.message}`);
+  }
+  // courses
+  if (r.courses?.length) {
+    const { error } = await admin.from('courses')
+      .upsert(r.courses, { onConflict: 'oneroster_course_sourced_id', ignoreDuplicates: false });
+    if (error) throw new Error(`courses upsert failed: ${error.message}`);
+  }
+  const courseMap = new Map<string, string>();
+  if (r.courses?.length) {
+    const { data, error } = await admin.from('courses')
+      .select('id, oneroster_course_sourced_id')
+      .in('oneroster_course_sourced_id', r.courses.map((c: any) => c.oneroster_course_sourced_id));
+    if (error) throw new Error(`course lookup failed: ${error.message}`);
+    for (const row of (data ?? [])) courseMap.set(row.oneroster_course_sourced_id, row.id);
+  }
+  // Re-fetch term map after upsert in case it was empty before
+  if (r.terms?.length && termMap.size === 0) {
+    const { data, error } = await admin.from('terms')
+      .select('id, oneroster_academic_session_sourced_id')
+      .in('oneroster_academic_session_sourced_id', r.terms.map((t: any) => t.oneroster_academic_session_sourced_id));
+    if (error) throw new Error(`term lookup retry failed: ${error.message}`);
+    for (const row of (data ?? [])) termMap.set(row.oneroster_academic_session_sourced_id, row.id);
+  }
+
+  // course_sections — resolve course_id, campus_id, term_id from temp fields
+  for (const cs of r.course_sections ?? []) {
+    if (cs._or_course_sid && courseMap.has(cs._or_course_sid)) cs.course_id = courseMap.get(cs._or_course_sid);
+    if (cs._or_school_sid && campusMap.has(cs._or_school_sid)) cs.campus_id = campusMap.get(cs._or_school_sid);
+    if (cs._or_term_sid   && termMap.has(cs._or_term_sid))     cs.term_id   = termMap.get(cs._or_term_sid);
+    delete cs._or_course_sid; delete cs._or_school_sid; delete cs._or_term_sid;
+  }
+  if (r.course_sections?.length) {
     const CHUNK = 500;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const { error } = await admin.from(table)
-        .upsert(rows.slice(i, i + CHUNK), { onConflict: conflict, ignoreDuplicates: false });
-      if (error) throw new Error(`${table} upsert failed: ${error.message}`);
+    for (let i = 0; i < r.course_sections.length; i += CHUNK) {
+      const { error } = await admin.from('course_sections')
+        .upsert(r.course_sections.slice(i, i + CHUNK), { onConflict: 'oneroster_class_sourced_id', ignoreDuplicates: false });
+      if (error) throw new Error(`course_sections upsert failed: ${error.message}`);
     }
   }
 
-  // 4) Auto-populate staff_whitelist for SSO. We only insert rows that
+  // 4) Teachers / staff / students
+  for (const [tbl, rows] of [
+    ['teachers', r.teachers],
+    ['staff',    r.staff],
+    ['students', r.students],
+  ] as const) {
+    if (!rows?.length) continue;
+    const CHUNK = 500;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const { error } = await admin.from(tbl)
+        .upsert(rows.slice(i, i + CHUNK), { onConflict: 'oneroster_user_sourced_id', ignoreDuplicates: false });
+      if (error) throw new Error(`${tbl} upsert failed: ${error.message}`);
+    }
+  }
+
+  // 5) Build user / section lookup maps for enrollments
+  const sectionMap = new Map<string, string>();
+  if (r.course_sections?.length) {
+    const { data, error } = await admin.from('course_sections')
+      .select('id, oneroster_class_sourced_id')
+      .in('oneroster_class_sourced_id', r.course_sections.map((cs: any) => cs.oneroster_class_sourced_id));
+    if (error) throw new Error(`section lookup failed: ${error.message}`);
+    for (const row of (data ?? [])) sectionMap.set(row.oneroster_class_sourced_id, row.id);
+  }
+  const studentMap = new Map<string, string>();
+  if (r.students?.length) {
+    const { data, error } = await admin.from('students')
+      .select('id, oneroster_user_sourced_id')
+      .in('oneroster_user_sourced_id', r.students.map((s: any) => s.oneroster_user_sourced_id));
+    if (error) throw new Error(`student lookup failed: ${error.message}`);
+    for (const row of (data ?? [])) studentMap.set(row.oneroster_user_sourced_id, row.id);
+  }
+  const teacherMap = new Map<string, string>();
+  if (r.teachers?.length) {
+    const { data, error } = await admin.from('teachers')
+      .select('id, oneroster_user_sourced_id')
+      .in('oneroster_user_sourced_id', r.teachers.map((t: any) => t.oneroster_user_sourced_id));
+    if (error) throw new Error(`teacher lookup failed: ${error.message}`);
+    for (const row of (data ?? [])) teacherMap.set(row.oneroster_user_sourced_id, row.id);
+  }
+
+  // 6) Resolve and upsert enrollments
+  let droppedStudentEnrollments = 0;
+  let droppedTeacherAssignments = 0;
+  const seStrong: any[] = [];
+  for (const se of r.student_enrollments ?? []) {
+    const sId = studentMap.get(se._or_user_sid);
+    const cId = sectionMap.get(se._or_class_sid);
+    delete se._or_user_sid; delete se._or_class_sid;
+    if (!sId || !cId) { droppedStudentEnrollments++; continue; }
+    se.student_id = sId; se.course_section_id = cId;
+    seStrong.push(se);
+  }
+  if (seStrong.length) {
+    const CHUNK = 500;
+    for (let i = 0; i < seStrong.length; i += CHUNK) {
+      const { error } = await admin.from('student_enrollments')
+        .upsert(seStrong.slice(i, i + CHUNK), { onConflict: 'oneroster_enrollment_sourced_id', ignoreDuplicates: false });
+      if (error) throw new Error(`student_enrollments upsert failed: ${error.message}`);
+    }
+  }
+
+  const tcStrong: any[] = [];
+  for (const ta of r.teacher_class_assignments ?? []) {
+    const tId = teacherMap.get(ta._or_user_sid);
+    const cId = sectionMap.get(ta._or_class_sid);
+    delete ta._or_user_sid; delete ta._or_class_sid;
+    if (!tId || !cId) { droppedTeacherAssignments++; continue; }
+    ta.teacher_id = tId; ta.course_section_id = cId;
+    tcStrong.push(ta);
+  }
+  if (tcStrong.length) {
+    const CHUNK = 500;
+    for (let i = 0; i < tcStrong.length; i += CHUNK) {
+      const { error } = await admin.from('teacher_class_assignments')
+        .upsert(tcStrong.slice(i, i + CHUNK), { onConflict: 'oneroster_enrollment_sourced_id', ignoreDuplicates: false });
+      if (error) throw new Error(`teacher_class_assignments upsert failed: ${error.message}`);
+    }
+  }
+
+  // 7) Auto-populate staff_whitelist for SSO. We only insert rows that
   //    don't already exist so manual role upgrades are preserved.
-  //
-  //    a) Every teacher with an email becomes a `teacher` whitelist row.
-  //    b) Administrative staff get auto-whitelisted with the matching app role:
-  //         districtAdministrator -> district_admin
-  //         siteAdministrator     -> campus_admin
-  //         administrator         -> campus_admin
-  //       Other staff (counselor, academicCoach, proctor, etc.) sync into the
-  //       staff table for visibility but DO NOT get auto-SSO access — a super
-  //       admin must grant access manually on Integrations -> Staff Access.
   let whitelistAdded = 0;
 
   // Teachers
@@ -494,7 +614,11 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     }
   }
 
-  return { staffAdded: whitelistAdded };
+  return {
+    staffAdded: whitelistAdded,
+    droppedStudentEnrollments,
+    droppedTeacherAssignments,
+  };
 }
 
 // --------------------------------------------------------------------------
