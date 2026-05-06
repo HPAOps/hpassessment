@@ -1,8 +1,7 @@
 // ==========================================================================
 // HPA -- OneRoster v1.2 REST API sync  (Supabase Edge Function)
-// ==========================================================================
-// Dashboard-editor safe version: single quotes only, pure ASCII.
-// Deployed name: oneroster-api-sync
+// v6: streamlined upsert pipeline using upsert(...).select() to capture IDs
+// without needing big IN clauses (avoids URL length limits on PostgREST).
 // ==========================================================================
 
 // deno-lint-ignore-file no-explicit-any
@@ -66,7 +65,6 @@ Deno.serve(async (req: Request) => {
   const clientId     = secretMap.get('oneroster_api_client_id');
   const clientSecret = secretMap.get('oneroster_api_client_secret');
   const tokenUrl     = secretMap.get('oneroster_api_token_url');
-  // Preserve query string (e.g. ?appName=hpa) — only strip trailing slashes on the path
   const rawBaseUrl   = secretMap.get('oneroster_api_base_url') || '';
   const baseUrl      = rawBaseUrl.includes('?')
     ? rawBaseUrl
@@ -97,7 +95,7 @@ Deno.serve(async (req: Request) => {
     const warnings: string[] = [];
     if (!row_counts.orgs)  warnings.push('no orgs returned');
     if (!row_counts.users) warnings.push('no users returned');
-    if (droppedStudentEnrollments) warnings.push(`${droppedStudentEnrollments} student enrollments not linked (missing student or section)`);
+    if (droppedStudentEnrollments) warnings.push(`${droppedStudentEnrollments} student enrollments not linked`);
     if (droppedTeacherAssignments) warnings.push(`${droppedTeacherAssignments} teacher assignments not linked`);
 
     const runId = await recordSyncRun(admin, {
@@ -130,9 +128,6 @@ Deno.serve(async (req: Request) => {
   }
 });
 
-// --------------------------------------------------------------------------
-// OAuth: client_credentials grant
-// --------------------------------------------------------------------------
 async function fetchAccessToken(tokenUrl: string, clientId: string, clientSecret: string) {
   const body = new URLSearchParams({
     grant_type: 'client_credentials',
@@ -155,9 +150,6 @@ async function fetchAccessToken(tokenUrl: string, clientId: string, clientSecret
   return j.access_token as string;
 }
 
-// --------------------------------------------------------------------------
-// Paginated GET
-// --------------------------------------------------------------------------
 const PAGE_LIMIT = 5000;
 const COLLECTIONS = [
   { key: 'orgs',              path: '/orgs' },
@@ -172,7 +164,6 @@ const COLLECTIONS = [
 async function fetchCollection(baseUrl: string, path: string, token: string) {
   const out: any[] = [];
   let offset = 0;
-  // Preserve any query string the user included in the Base URL (e.g. ?appName=hpa)
   const [baseRoot, baseQuery = ''] = baseUrl.split('?');
   const basePathRooted = baseRoot.replace(/\/+$/, '');
   for (;;) {
@@ -208,9 +199,6 @@ async function fetchAll(baseUrl: string, token: string) {
   return data;
 }
 
-// --------------------------------------------------------------------------
-// Mapping
-// --------------------------------------------------------------------------
 function mapOneRosterToOperational(d: Record<string, any[]>) {
   const counts = { orgs: 0, sessions: 0, courses: 0, classes: 0, users: 0, students: 0, teachers: 0, staff: 0, enrollments: 0, demographics: 0 };
 
@@ -253,8 +241,6 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   }));
   counts.courses = courses.length;
 
-  // course_sections need course_id and campus_id resolved AFTER upserts;
-  // capture the OneRoster ref ids here as temp fields.
   const course_sections = (d.classes ?? []).map(cl => ({
     oneroster_class_sourced_id: cl.sourcedId,
     section_code: cl.classCode || cl.title || cl.sourcedId,
@@ -268,18 +254,12 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   const students: any[] = [];
   const teachers: any[] = [];
   const staff: any[] = [];
-  const roleStats: Record<string, number> = {}; // diagnostic: primaryRole -> count
+  const roleStats: Record<string, number> = {};
   for (const u of (d.users ?? [])) {
-    // Item 1: Only pull active users
     const userStatus = String(u.status || 'active').toLowerCase();
     if (userStatus !== 'active') continue;
 
     const roles = Array.isArray(u.roles) ? u.roles : [];
-
-    // Use the OneRoster `roleType=primary` role to bucket the user. Many
-    // admin staff (principals, asst principals, academic coaches) ALSO carry
-    // a secondary teaching role for backup coverage; they should still be
-    // staff. Falls back to first role, then top-level user.role.
     const primaryEntry =
          roles.find((r: any) => String(r.roleType || '').toLowerCase() === 'primary')
       || roles[0]
@@ -290,7 +270,6 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
 
     roleStats[primaryRoleStr || '(none)'] = (roleStats[primaryRoleStr || '(none)'] || 0) + 1;
 
-    // Pick org from primary role first; fall back to any role / primaryOrg.
     const orgFromPrimary = primaryEntry?.org?.sourcedId;
     const primaryOrgSourcedId =
          orgFromPrimary
@@ -366,144 +345,70 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   };
 }
 
-// --------------------------------------------------------------------------
-// Upsert
-// --------------------------------------------------------------------------
+// Chunked upsert that returns id maps in one pass via .select(). Avoids
+// huge `.in()` URLs that PostgREST rejects.
+async function upsertChunked(
+  admin: any, table: string, rows: any[],
+  conflictCol: string, idMap?: Map<string, string>,
+) {
+  if (!rows?.length) return;
+  const CHUNK = 500;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const slice = rows.slice(i, i + CHUNK);
+    const { data, error } = await admin.from(table)
+      .upsert(slice, { onConflict: conflictCol, ignoreDuplicates: false })
+      .select(`id, ${conflictCol}`);
+    if (error) throw new Error(`${table} upsert failed: ${error.message}`);
+    if (idMap) for (const row of data ?? []) idMap.set(row[conflictCol], row.id);
+  }
+}
+
 async function upsertMapped(admin: any, mapped: { records: Record<string, any[]> }) {
   const r = mapped.records;
 
-  // 1) Campuses first
-  if (r.campuses?.length) {
-    const { error } = await admin.from('campuses')
-      .upsert(r.campuses, { onConflict: 'oneroster_org_sourced_id', ignoreDuplicates: false });
-    if (error) throw new Error(`campuses upsert failed: ${error.message}`);
-  }
-
-  // 2) Build sourcedId -> uuid map for campuses so we can resolve users' campus_id
+  // 1) Campuses
   const campusMap = new Map<string, string>();
-  if (r.campuses?.length) {
-    const { data, error } = await admin.from('campuses')
-      .select('id, oneroster_org_sourced_id')
-      .in('oneroster_org_sourced_id', r.campuses.map((c: any) => c.oneroster_org_sourced_id));
-    if (error) throw new Error(`campus lookup failed: ${error.message}`);
-    for (const row of (data ?? [])) campusMap.set(row.oneroster_org_sourced_id, row.id);
-  }
+  await upsertChunked(admin, 'campuses', r.campuses, 'oneroster_org_sourced_id', campusMap);
 
-  // Attach campus_id to teachers/students/staff, then strip temp field
+  // Resolve primary-org -> campus_id for users
   for (const t of r.teachers ?? []) {
-    if (t.primary_org_sourced_id && campusMap.has(t.primary_org_sourced_id)) {
-      t.campus_id = campusMap.get(t.primary_org_sourced_id);
-    }
+    if (t.primary_org_sourced_id && campusMap.has(t.primary_org_sourced_id)) t.campus_id = campusMap.get(t.primary_org_sourced_id);
     delete t.primary_org_sourced_id;
   }
   for (const s of r.students ?? []) {
-    if (s.primary_org_sourced_id && campusMap.has(s.primary_org_sourced_id)) {
-      s.campus_id = campusMap.get(s.primary_org_sourced_id);
-    }
+    if (s.primary_org_sourced_id && campusMap.has(s.primary_org_sourced_id)) s.campus_id = campusMap.get(s.primary_org_sourced_id);
     delete s.primary_org_sourced_id;
   }
   for (const st of r.staff ?? []) {
-    if (st.primary_org_sourced_id && campusMap.has(st.primary_org_sourced_id)) {
-      st.campus_id = campusMap.get(st.primary_org_sourced_id);
-    }
+    if (st.primary_org_sourced_id && campusMap.has(st.primary_org_sourced_id)) st.campus_id = campusMap.get(st.primary_org_sourced_id);
     delete st.primary_org_sourced_id;
   }
 
-  // 3) Resolve course_section FKs (course_id, campus_id, term_id) before upserting
+  // 2) School years + terms
+  await upsertChunked(admin, 'school_years', r.school_years, 'oneroster_academic_session_sourced_id');
   const termMap = new Map<string, string>();
-  if (r.terms?.length) {
-    const { data, error } = await admin.from('terms')
-      .select('id, oneroster_academic_session_sourced_id')
-      .in('oneroster_academic_session_sourced_id', r.terms.map((t: any) => t.oneroster_academic_session_sourced_id));
-    if (error) throw new Error(`term lookup failed: ${error.message}`);
-    for (const row of (data ?? [])) termMap.set(row.oneroster_academic_session_sourced_id, row.id);
-  }
-  // school_years + terms first
-  for (const tbl of ['school_years', 'terms'] as const) {
-    if (!r[tbl]?.length) continue;
-    const { error } = await admin.from(tbl)
-      .upsert(r[tbl], { onConflict: 'oneroster_academic_session_sourced_id', ignoreDuplicates: false });
-    if (error) throw new Error(`${tbl} upsert failed: ${error.message}`);
-  }
-  // courses
-  if (r.courses?.length) {
-    const { error } = await admin.from('courses')
-      .upsert(r.courses, { onConflict: 'oneroster_course_sourced_id', ignoreDuplicates: false });
-    if (error) throw new Error(`courses upsert failed: ${error.message}`);
-  }
-  const courseMap = new Map<string, string>();
-  if (r.courses?.length) {
-    const { data, error } = await admin.from('courses')
-      .select('id, oneroster_course_sourced_id')
-      .in('oneroster_course_sourced_id', r.courses.map((c: any) => c.oneroster_course_sourced_id));
-    if (error) throw new Error(`course lookup failed: ${error.message}`);
-    for (const row of (data ?? [])) courseMap.set(row.oneroster_course_sourced_id, row.id);
-  }
-  // Re-fetch term map after upsert in case it was empty before
-  if (r.terms?.length && termMap.size === 0) {
-    const { data, error } = await admin.from('terms')
-      .select('id, oneroster_academic_session_sourced_id')
-      .in('oneroster_academic_session_sourced_id', r.terms.map((t: any) => t.oneroster_academic_session_sourced_id));
-    if (error) throw new Error(`term lookup retry failed: ${error.message}`);
-    for (const row of (data ?? [])) termMap.set(row.oneroster_academic_session_sourced_id, row.id);
-  }
+  await upsertChunked(admin, 'terms', r.terms, 'oneroster_academic_session_sourced_id', termMap);
 
-  // course_sections — resolve course_id, campus_id, term_id from temp fields
+  // 3) Courses
+  const courseMap = new Map<string, string>();
+  await upsertChunked(admin, 'courses', r.courses, 'oneroster_course_sourced_id', courseMap);
+
+  // 4) course_sections — resolve course_id, campus_id, term_id
   for (const cs of r.course_sections ?? []) {
     if (cs._or_course_sid && courseMap.has(cs._or_course_sid)) cs.course_id = courseMap.get(cs._or_course_sid);
     if (cs._or_school_sid && campusMap.has(cs._or_school_sid)) cs.campus_id = campusMap.get(cs._or_school_sid);
     if (cs._or_term_sid   && termMap.has(cs._or_term_sid))     cs.term_id   = termMap.get(cs._or_term_sid);
     delete cs._or_course_sid; delete cs._or_school_sid; delete cs._or_term_sid;
   }
-  if (r.course_sections?.length) {
-    const CHUNK = 500;
-    for (let i = 0; i < r.course_sections.length; i += CHUNK) {
-      const { error } = await admin.from('course_sections')
-        .upsert(r.course_sections.slice(i, i + CHUNK), { onConflict: 'oneroster_class_sourced_id', ignoreDuplicates: false });
-      if (error) throw new Error(`course_sections upsert failed: ${error.message}`);
-    }
-  }
-
-  // 4) Teachers / staff / students
-  for (const [tbl, rows] of [
-    ['teachers', r.teachers],
-    ['staff',    r.staff],
-    ['students', r.students],
-  ] as const) {
-    if (!rows?.length) continue;
-    const CHUNK = 500;
-    for (let i = 0; i < rows.length; i += CHUNK) {
-      const { error } = await admin.from(tbl)
-        .upsert(rows.slice(i, i + CHUNK), { onConflict: 'oneroster_user_sourced_id', ignoreDuplicates: false });
-      if (error) throw new Error(`${tbl} upsert failed: ${error.message}`);
-    }
-  }
-
-  // 5) Build user / section lookup maps for enrollments
   const sectionMap = new Map<string, string>();
-  if (r.course_sections?.length) {
-    const { data, error } = await admin.from('course_sections')
-      .select('id, oneroster_class_sourced_id')
-      .in('oneroster_class_sourced_id', r.course_sections.map((cs: any) => cs.oneroster_class_sourced_id));
-    if (error) throw new Error(`section lookup failed: ${error.message}`);
-    for (const row of (data ?? [])) sectionMap.set(row.oneroster_class_sourced_id, row.id);
-  }
-  const studentMap = new Map<string, string>();
-  if (r.students?.length) {
-    const { data, error } = await admin.from('students')
-      .select('id, oneroster_user_sourced_id')
-      .in('oneroster_user_sourced_id', r.students.map((s: any) => s.oneroster_user_sourced_id));
-    if (error) throw new Error(`student lookup failed: ${error.message}`);
-    for (const row of (data ?? [])) studentMap.set(row.oneroster_user_sourced_id, row.id);
-  }
+  await upsertChunked(admin, 'course_sections', r.course_sections, 'oneroster_class_sourced_id', sectionMap);
+
+  // 5) Teachers / staff / students
   const teacherMap = new Map<string, string>();
-  if (r.teachers?.length) {
-    const { data, error } = await admin.from('teachers')
-      .select('id, oneroster_user_sourced_id')
-      .in('oneroster_user_sourced_id', r.teachers.map((t: any) => t.oneroster_user_sourced_id));
-    if (error) throw new Error(`teacher lookup failed: ${error.message}`);
-    for (const row of (data ?? [])) teacherMap.set(row.oneroster_user_sourced_id, row.id);
-  }
+  const studentMap = new Map<string, string>();
+  await upsertChunked(admin, 'teachers', r.teachers, 'oneroster_user_sourced_id', teacherMap);
+  await upsertChunked(admin, 'staff',    r.staff,    'oneroster_user_sourced_id');
+  await upsertChunked(admin, 'students', r.students, 'oneroster_user_sourced_id', studentMap);
 
   // 6) Resolve and upsert enrollments
   let droppedStudentEnrollments = 0;
@@ -517,14 +422,7 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     se.student_id = sId; se.course_section_id = cId;
     seStrong.push(se);
   }
-  if (seStrong.length) {
-    const CHUNK = 500;
-    for (let i = 0; i < seStrong.length; i += CHUNK) {
-      const { error } = await admin.from('student_enrollments')
-        .upsert(seStrong.slice(i, i + CHUNK), { onConflict: 'oneroster_enrollment_sourced_id', ignoreDuplicates: false });
-      if (error) throw new Error(`student_enrollments upsert failed: ${error.message}`);
-    }
-  }
+  await upsertChunked(admin, 'student_enrollments', seStrong, 'oneroster_enrollment_sourced_id');
 
   const tcStrong: any[] = [];
   for (const ta of r.teacher_class_assignments ?? []) {
@@ -535,79 +433,55 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
     ta.teacher_id = tId; ta.course_section_id = cId;
     tcStrong.push(ta);
   }
-  if (tcStrong.length) {
-    const CHUNK = 500;
-    for (let i = 0; i < tcStrong.length; i += CHUNK) {
-      const { error } = await admin.from('teacher_class_assignments')
-        .upsert(tcStrong.slice(i, i + CHUNK), { onConflict: 'oneroster_enrollment_sourced_id', ignoreDuplicates: false });
-      if (error) throw new Error(`teacher_class_assignments upsert failed: ${error.message}`);
-    }
-  }
+  await upsertChunked(admin, 'teacher_class_assignments', tcStrong, 'oneroster_enrollment_sourced_id');
 
   // 7) Auto-populate staff_whitelist for SSO. We only insert rows that
   //    don't already exist so manual role upgrades are preserved.
   let whitelistAdded = 0;
 
-  // Teachers
-  const teachersWithEmail = (r.teachers ?? []).filter((t: any) => t.email && t.is_active);
-  let teacherWlRows: any[] = [];
-  if (teachersWithEmail.length) {
-    const { data: tRows, error: tErr } = await admin.from('teachers')
-      .select('id, oneroster_user_sourced_id, email, campus_id')
-      .in('oneroster_user_sourced_id', teachersWithEmail.map((t: any) => t.oneroster_user_sourced_id));
-    if (tErr) throw new Error(`teacher id lookup failed: ${tErr.message}`);
-    const teacherByOr = new Map<string, any>();
-    for (const tr of tRows ?? []) teacherByOr.set(tr.oneroster_user_sourced_id, tr);
+  const teacherWlRows: any[] = (r.teachers ?? [])
+    .filter((t: any) => t.email && t.is_active && teacherMap.has(t.oneroster_user_sourced_id))
+    .map((t: any) => ({
+      email: t.email.toLowerCase(),
+      role: 'teacher',
+      campus_id: t.campus_id ?? null,
+      teacher_id: teacherMap.get(t.oneroster_user_sourced_id),
+      tenant_hint: 'oneroster_auto',
+    }));
 
-    teacherWlRows = teachersWithEmail
-      .map((t: any) => {
-        const dbT = teacherByOr.get(t.oneroster_user_sourced_id);
-        if (!dbT?.email) return null;
-        return {
-          email: dbT.email.toLowerCase(),
-          role: 'teacher',
-          campus_id: dbT.campus_id ?? null,
-          teacher_id: dbT.id,
-          tenant_hint: 'oneroster_auto',
-        };
-      })
-      .filter(Boolean) as any[];
-  }
-
-  // Administrative staff
   const adminRoleMap: Record<string, string> = {
     districtadministrator: 'district_admin',
     siteadministrator:     'campus_admin',
     administrator:         'campus_admin',
   };
-  const adminStaff = (r.staff ?? []).filter((s: any) =>
-    s.email && s.is_active && adminRoleMap[String(s.oneroster_role || '').toLowerCase()]
-  );
-  let staffWlRows: any[] = [];
-  if (adminStaff.length) {
-    staffWlRows = adminStaff.map((s: any) => ({
+  const staffWlRows: any[] = (r.staff ?? [])
+    .filter((s: any) => s.email && s.is_active && adminRoleMap[String(s.oneroster_role || '').toLowerCase()])
+    .map((s: any) => ({
       email: s.email.toLowerCase(),
       role: adminRoleMap[String(s.oneroster_role).toLowerCase()],
       campus_id: s.campus_id ?? null,
       teacher_id: null,
       tenant_hint: 'oneroster_auto',
     }));
-  }
 
   const allWl = [...teacherWlRows, ...staffWlRows];
   if (allWl.length) {
+    // Chunk the existence check to avoid large IN clauses.
+    const existingSet = new Set<string>();
     const candidateEmails = allWl.map(w => w.email);
-    const { data: existing, error: exErr } = await admin.from('staff_whitelist')
-      .select('email').in('email', candidateEmails);
-    if (exErr) throw new Error(`staff_whitelist lookup failed: ${exErr.message}`);
-    const existingSet = new Set((existing ?? []).map((e: any) => e.email.toLowerCase()));
+    const CHUNK = 200;
+    for (let i = 0; i < candidateEmails.length; i += CHUNK) {
+      const batch = candidateEmails.slice(i, i + CHUNK);
+      const { data, error } = await admin.from('staff_whitelist')
+        .select('email').in('email', batch);
+      if (error) throw new Error(`staff_whitelist lookup failed: ${error.message}`);
+      for (const row of data ?? []) existingSet.add(String(row.email).toLowerCase());
+    }
     const newRows = allWl.filter(w => !existingSet.has(w.email));
-
     if (newRows.length) {
-      const CHUNK = 500;
-      for (let i = 0; i < newRows.length; i += CHUNK) {
-        const { error } = await admin.from('staff_whitelist')
-          .insert(newRows.slice(i, i + CHUNK));
+      for (let i = 0; i < newRows.length; i += 500) {
+        const slice = newRows.slice(i, i + 500);
+        const { error } = await admin.from('staff_whitelist').insert(slice);
         if (error) throw new Error(`staff_whitelist insert failed: ${error.message}`);
       }
       whitelistAdded = newRows.length;
@@ -621,9 +495,6 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
   };
 }
 
-// --------------------------------------------------------------------------
-// Record a sync run
-// --------------------------------------------------------------------------
 async function recordSyncRun(admin: any, p: {
   status: string; source: string; actorEmail: string | null;
   error: string | null; row_counts: Record<string, number>;
@@ -642,8 +513,6 @@ async function recordSyncRun(admin: any, p: {
   return data ?? null;
 }
 
-// Build the first full URL for each collection — useful in sync_runs.details
-// to debug empty responses.
 function sampleUrls(baseUrl: string): string[] {
   const [baseRoot, baseQuery = ''] = baseUrl.split('?');
   const basePathRooted = baseRoot.replace(/\/+$/, '');
