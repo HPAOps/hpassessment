@@ -1,0 +1,60 @@
+{
+  "summary": "Iteration_6 live-Supabase end-to-end re-test of the student flow. Login + course list + teacher verify + test selector all PASS for student 300699 (Daania Abdulbari). HOWEVER the headline fix for the student test-taking page DID NOT WORK: clicking the Biology 1 EOC tile lands on /student/test/75eb7eea-5d5c-4494-8dc4-576939580710 and the page IMMEDIATELY shows 'We couldn't load your test — Failed to execute text on Response: body stream already read', the EXACT error the rpcDirect helper was supposed to bypass. A 401 was also logged in the console for the RPC call. Test selector now correctly shows 'EOC Biology 1 · 42 questions · Window 2026-05-04 → 2026-05-07', so the SQL fix that imports questions/window appears to have been applied. The blocker is now ONE step further down: the StudentTest page itself still throws the body-stream error before any question can render, so save_response / submit_attempt could not be exercised at all.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "/rest/v1/rpc/get_student_attempt",
+        "issue": "Returns 401 when called from /student/test/75eb7eea-5d5c-4494-8dc4-576939580710. Almost certainly because the in-memory attempt session_secret is missing from localStorage (this attempt was created in a previous browser session — see iteration_5 / review-request note about the existing in-progress attempt id). When findOrCreateAttempt is bypassed (because an attempt already exists and the UI navigates straight to the test page), there is no opportunity to refresh the session_secret cache. RLS / SECURITY DEFINER then rejects the read.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "StudentTest.jsx",
+        "issue": "Even with rpcDirect in place, the page still surfaces 'Failed to execute text on Response: body stream already read'. rpcDirect itself only calls resp.text() once, so a SECOND reader of the Response body is consuming it before rpcDirect can. Highly likely culprit: PostHog (loaded in /app/frontend/public/index.html line 45+) installs a fetch instrumentation that reads/clones response bodies for session-recording network capture. With supabase-js@2.105.1 already known-buggy on body reads, layering PostHog's fetch wrapper on top reproduces the same symptom even on a hand-rolled fetch. Recommend either (a) disable PostHog network capture for /rest/v1/rpc/* via posthog.init({ session_recording: { recordHeaders: false, recordBody: false } }) or capture_performance:false, or (b) clone the response before reading: const r2 = resp.clone(); const text = await r2.text(); — clone() is cheap and isolates rpcDirect from any other reader.",
+        "selector": "[data-testid] page body / We couldn't load your test card",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "StudentTestSelector / StudentCoursePicker",
+        "issue": "React warning 'Encountered two children with the same key' fired twice on /student/courses for course UUIDs 86c495ba-... and d2cc8558-... — Daania's enrollments contain duplicate rows for the same course (likely two active sections / re-enrollment). Cosmetic for now but will cause render glitches when the duplicate course is interacted with.",
+        "selector": ".course-list children",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Student → Biology 1 EOC → /student/test/:attemptId",
+        "issue": "Page crashes on initial load before Question 1 ever paints. Save / next / prev / submit could not be tested because the page never reaches the question-rendering state. Toast 'Could not load the test: Failed to execute text on Response: body stream already read' is shown and the user is stranded on a 'We couldn't load your test' screen with only a 'Back to my courses' button.",
+        "affected_selectors": ["StudentTest error card", "[data-testid=back-to-courses-btn]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "BLOCKING: fix the body-stream-already-read regression on StudentTest. Two complementary fixes recommended: (1) in /app/frontend/src/lib/api.js rpcDirect, call resp.clone().text() instead of resp.text() so any concurrent reader (PostHog, devtools, future SDK) cannot race rpcDirect; (2) initialize PostHog with capture_performance:false and session_recording.recordBody:false so it does NOT try to consume Supabase RPC bodies in the first place.",
+    "Diagnose why the in-progress attempt 75eb7eea-5d5c-4494-8dc4-576939580710 returns 401 from get_student_attempt. The session_secret cache is per-browser localStorage; if a tester loads that URL on a fresh browser the secret is unknown. Either (a) make the EOC tile route through findOrCreateAttempt (which RETURNS the secret) instead of directly to /student/test/<existing-id>, or (b) loosen the session_secret check so the same student_db_id can re-acquire it, or (c) start a fresh attempt id rather than reusing 75eb7eea-... .",
+    "Investigate duplicate enrollment rows on /student/courses for student 300699 — two courses appear twice with identical UUIDs (86c495ba-... and d2cc8558-...) causing React duplicate-key warnings. Likely a JOIN cardinality issue in student_lookup or in the cached enrollments payload."
+  ],
+  "critical_code_review_comments": [
+    "rpcDirect in /app/frontend/src/lib/api.js reads `await resp.text()` once which is correct in isolation, but does NOT defend against third-party fetch instrumentation (PostHog session recording). Defensive fix: change line 41 to `const text = await resp.clone().text();`",
+    "PostHog is initialized at /app/frontend/public/index.html:103 with no opts to disable network/body capture. For a FERPA-conscious app capturing student assessment payloads via PostHog is also a privacy concern — answers, names, IDs would all flow through us.i.posthog.com. Strongly recommend `disable_session_recording: true` for the student route or whitelist staff routes only.",
+    "StudentTestSelector navigates to /student/test/<existing-attempt-id> when an in-progress attempt is found, but the corresponding session_secret may not be in localStorage for that browser. The flow needs to ALWAYS go through start_or_get_attempt (which atomically returns the secret) before rendering StudentTest.",
+    "Auth-related console errors (401) are silently swallowed by rpcDirect's catch-and-throw — the surfaced toast 'Failed to execute text on Response: body stream already read' is misleading; users will think the network died when actually the server returned a clean 401 JSON envelope. Suggest logging resp.status in the thrown Error message."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "~80% — 4 of 5 student RPCs cannot be verified end-to-end because the StudentTest page won't load; student_open_tests / start_or_get_attempt obviously work since the EOC tile renders the correct test with 42 questions and dates",
+    "frontend": "~50% — / → ID → courses → teacher verify → test selector all work; the final /student/test/:attemptId step is broken with the SAME 'body stream already read' error the rpcDirect helper was supposed to fix"
+  },
+  "test_credentials": "Student 300699 (Daania Abdulbari) verified working through teacher-verify and test-selector. Staff creds super@hpa.test, teacher@hpa.test not retested this iteration because the BLOCKING student-side regression takes precedence.",
+  "seed_data_creation": "None this iteration. Used the pre-existing in-progress attempt 75eb7eea-5d5c-4494-8dc4-576939580710 as documented in the review request.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "After the main agent applies (a) `resp.clone().text()` defensive read in rpcDirect AND (b) PostHog session-recording disabled / network-capture off, AND (c) makes StudentTestSelector route through start_or_get_attempt (or invalidates the stuck attempt 75eb7eea-... on the server so a fresh one is created with a fresh session_secret), re-run: / → 300699 → Pre-AP Biology 1 → Yes that's my teacher → Biology 1 EOC tile → expect to see 'Question 1 of 42' with an image and A/B/C/D answer choices, NOT the red error toast. Then exercise saveResponse and submitAttempt. Also retest staff flows (super@hpa.test, teacher@hpa.test) which were skipped here.",
+  "rca of the issue": "The supabase-js@2.105.1 'body stream already read' bug was correctly diagnosed and the rpcDirect helper does avoid it for the happy path. BUT the bypass is incomplete because (1) PostHog's fetch instrumentation, loaded globally in index.html, also reads the same Response body for session-recording network capture, leading to the SAME error class on top of native fetch — not just on supabase-js; (2) the underlying RPC call now legitimately returns 401 because the in-progress attempt id 75eb7eea-... has no session_secret in this browser's localStorage (the secret is set ONLY when start_or_get_attempt is called, which the EOC tile bypasses when it finds an existing attempt). So two compounding issues: a real 401 from RLS, and a spurious 'body stream already read' wrapper that hides it. Mitigations: (1) `await resp.clone().text()` in rpcDirect to neutralize any concurrent reader; (2) PostHog config to disable network body capture; (3) re-route the EOC tile through start_or_get_attempt so the secret is always populated, OR add a fallback path that returns a friendly 'session expired, restart' error instead of the cryptic body-stream string."
+}

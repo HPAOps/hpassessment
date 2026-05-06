@@ -6,6 +6,55 @@ import * as seed from "./demoData";
 import { supabase, isDemoMode } from "./supabase";
 import { scoreAttempt, computeGrowth, shuffleSeeded } from "./scoring";
 
+// ---------------------------------------------------------------------------
+// Direct-fetch RPC fallback. supabase-js@2.105.1 has a known bug where it
+// double-reads the response body of failed RPC calls, surfacing every error
+// (404 not found, RLS reject, raise exception, etc.) as the cryptic
+// `TypeError: Failed to execute 'text' on 'Response': body stream already read`.
+// We bypass it for hot-path student RPCs by calling /rest/v1/rpc/<name>
+// directly and parsing the JSON ourselves.
+// ---------------------------------------------------------------------------
+async function rpcDirect(fnName, args) {
+  const SUPABASE_URL     = process.env.REACT_APP_SUPABASE_URL || "";
+  const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "";
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new Error("Supabase env vars not configured");
+  }
+  const headers = {
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+  };
+  // If a real Supabase session exists (staff user), use that JWT — needed so
+  // server-side RLS can read the staff role. The student flow runs as anon.
+  try {
+    const { data: session } = await supabase.auth.getSession();
+    const tok = session?.session?.access_token;
+    if (tok) headers["Authorization"] = `Bearer ${tok}`;
+  } catch { /* ignore */ }
+
+  const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fnName}`, {
+    method: "POST", headers, body: JSON.stringify(args ?? {}),
+  });
+  // Read body exactly once.
+  const text = await resp.text();
+  let body = null;
+  if (text) { try { body = JSON.parse(text); } catch { body = text; } }
+
+  if (!resp.ok) {
+    const msg = (body && typeof body === "object" && (body.message || body.hint || body.details))
+      || (typeof body === "string" && body) || `HTTP ${resp.status}`;
+    const err = new Error(msg);
+    err.code = body?.code;
+    err.details = body?.details;
+    err.hint = body?.hint;
+    err.status = resp.status;
+    throw err;
+  }
+  return body;
+}
+
 const STORAGE_KEY = "hpa.demo.v2";
 
 // ---------------------------------------------------------------------------
@@ -431,18 +480,15 @@ export async function getOpenTestsForCourse(courseId) {
       (!t.opens_at || new Date(t.opens_at) <= today) &&
       (!t.closes_at || new Date(t.closes_at) >= today));
   }
-  const { data, error } = await supabase.rpc("student_open_tests", { p_course_id: courseId });
-  if (error) throw error;
-  return data || [];
+  // Use rpcDirect to bypass supabase-js@2.105.1's broken error handling.
+  return (await rpcDirect("student_open_tests", { p_course_id: courseId })) || [];
 }
 
 export async function listStudentAttempts(studentDbId) {
   if (isDemoMode) {
     return store().test_attempts.filter(a => a.student_id === studentDbId);
   }
-  const { data, error } = await supabase.rpc("student_attempts", { p_student_db_id: studentDbId });
-  if (error) throw error;
-  return data || [];
+  return (await rpcDirect("student_attempts", { p_student_db_id: studentDbId })) || [];
 }
 
 export async function getStudentAttempt(attemptId, studentDbId) {
@@ -466,13 +512,11 @@ export async function getStudentAttempt(attemptId, studentDbId) {
       responses: att.responses,
     };
   }
-  const { data, error } = await supabase.rpc("get_student_attempt", {
+  return await rpcDirect("get_student_attempt", {
     p_attempt_id: attemptId,
     p_student_db_id: studentDbId,
     p_session_secret: getAttemptSecret(attemptId),
   });
-  if (error) throw error;
-  return data;
 }
 
 export async function findOrCreateAttempt(studentDbId, testId, courseSectionId) {
@@ -496,10 +540,9 @@ export async function findOrCreateAttempt(studentDbId, testId, courseSectionId) 
     persist();
     return attempt;
   }
-  const { data, error } = await supabase.rpc("start_or_get_attempt", {
+  const data = await rpcDirect("start_or_get_attempt", {
     p_student_db_id: studentDbId, p_test_id: testId, p_section_id: courseSectionId,
   });
-  if (error) throw error;
   // Persist the session_secret keyed by attempt id for save/submit/read calls.
   if (data && data.id && data.session_secret) {
     try {
@@ -535,13 +578,12 @@ export async function saveResponse(attemptId, questionId, answer) {
     persist();
     return att;
   }
-  const { error } = await supabase.rpc("save_response", {
+  await rpcDirect("save_response", {
     p_attempt_id: attemptId,
     p_question_id: questionId,
     p_answer: answer,
     p_session_secret: getAttemptSecret(attemptId),
   });
-  if (error) throw error;
   return { id: attemptId };
 }
 
@@ -559,11 +601,10 @@ export async function submitAttempt(attemptId) {
     return att;
   }
   const secret = getAttemptSecret(attemptId);
-  const { data, error } = await supabase.rpc("submit_attempt", {
+  const data = await rpcDirect("submit_attempt", {
     p_attempt_id: attemptId,
     p_session_secret: secret,
   });
-  if (error) throw error;
   // Server invalidated secret after submit — remove from client cache.
   clearAttemptSecret(attemptId);
   return data;
