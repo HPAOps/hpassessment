@@ -1,7 +1,9 @@
 // ==========================================================================
 // HPA -- OneRoster v1.2 REST API sync  (Supabase Edge Function)
-// v6: streamlined upsert pipeline using upsert(...).select() to capture IDs
-// without needing big IN clauses (avoids URL length limits on PostgREST).
+// v9: multi-candidate campus resolution (enrollments -> primary role org ->
+// other roles -> primaryOrg -> orgs[]). First candidate matching a synced
+// campus wins. Plus a rescue pass that re-classifies guardian/relative
+// users as students when an enrollment with role='student' references them.
 // ==========================================================================
 
 // deno-lint-ignore-file no-explicit-any
@@ -264,22 +266,51 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   // Build helper maps so each user can be pinned to a SCHOOL org, not the
   // district. OneRoster's `primaryOrg` for many students points to the
   // auto-generated district office; that wouldn't match any campus in our
-  // table. Walk enrollments -> classes.school to derive each user's school.
+  // table. Walk enrollments -> classes.school to derive each user's possible
+  // schools (kept as a Set so we don't lock them to the first enrollment).
   const classToSchoolSid = new Map<string, string>();
   for (const cl of (d.classes ?? [])) {
     const sid = cl.school?.sourcedId
       || (Array.isArray(cl.schools) ? cl.schools[0]?.sourcedId : null);
     if (cl.sourcedId && sid) classToSchoolSid.set(cl.sourcedId, sid);
   }
-  const userToSchoolSid = new Map<string, string>();
+  const userToSchoolSids = new Map<string, Set<string>>();
   for (const e of (d.enrollments ?? [])) {
     const userSid  = e.user?.sourcedId;
     const classSid = e.class?.sourcedId;
     if (!userSid || !classSid) continue;
-    if (userToSchoolSid.has(userSid)) continue;
     const schoolSid = classToSchoolSid.get(classSid);
-    if (schoolSid) userToSchoolSid.set(userSid, schoolSid);
+    if (!schoolSid) continue;
+    if (!userToSchoolSids.has(userSid)) userToSchoolSids.set(userSid, new Set());
+    userToSchoolSids.get(userSid)!.add(schoolSid);
   }
+
+  // Helper: build the priority-ordered list of org sids we should try when
+  // resolving a user's campus_id. The upsert step picks the FIRST sid in
+  // this list that exists in campusMap.
+  const buildCandidateOrgSids = (u: any, roles: any[], primaryEntry: any): string[] => {
+    const out: string[] = [];
+    const push = (sid: any) => {
+      if (typeof sid === 'string' && sid && !out.includes(sid)) out.push(sid);
+    };
+    // 1. Enrollment-derived schools (authoritative for pinning to a campus)
+    const enrollSet = userToSchoolSids.get(u.sourcedId);
+    if (enrollSet) for (const sid of enrollSet) push(sid);
+    // 2. The primary role's org
+    push(primaryEntry?.org?.sourcedId);
+    // 3. Every other role's org
+    for (const r of roles) push(r?.org?.sourcedId);
+    // 4. user.primaryOrg (object or array form)
+    const poArr = Array.isArray(u.primaryOrg)
+      ? u.primaryOrg
+      : (u.primaryOrg ? [u.primaryOrg] : []);
+    for (const po of poArr) push(po?.sourcedId ?? po);
+    push(u.primaryOrgSourcedId);
+    // 5. user.orgs[] (catch-all)
+    const orgsList = Array.isArray(u.orgs) ? u.orgs : [];
+    for (const o of orgsList) push(o?.sourcedId ?? o);
+    return out;
+  };
 
   const students: any[] = [];
   const teachers: any[] = [];
@@ -319,19 +350,10 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
 
     roleStats[primaryRoleStr || '(none)'] = (roleStats[primaryRoleStr || '(none)'] || 0) + 1;
 
-    const orgFromPrimary = primaryEntry?.org?.sourcedId;
-    const primaryOrgSourcedId =
-         orgFromPrimary
-      || roles.find((r: any) => r?.org?.sourcedId)?.org?.sourcedId
-      || (Array.isArray(u.primaryOrg) ? u.primaryOrg[0]?.sourcedId : u.primaryOrg?.sourcedId)
-      || u.primaryOrgSourcedId
-      || (Array.isArray(u.orgs) ? u.orgs[0]?.sourcedId : null)
-      || null;
-
-    // Prefer the school sourcedId we derived from the user's first enrollment
-    // because OneRoster's `primaryOrg` is sometimes the district auto-org.
-    const enrollOrgSourcedId = userToSchoolSid.get(u.sourcedId);
-    const effectiveOrgSourcedId = enrollOrgSourcedId || primaryOrgSourcedId;
+    // Collect every plausible campus sid for this user. The upsert pass
+    // picks the FIRST one that's actually in `campusMap` (i.e. a real
+    // school we synced), giving us a multi-fallback resolution.
+    const candidateOrgSids = buildCandidateOrgSids(u, roles, primaryEntry);
 
     if (effectiveRoleStr === 'student') {
       students.push({
@@ -339,36 +361,88 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
         student_id: u.identifier || u.username || u.sourcedId,
         first_name: u.givenName, last_name: u.familyName,
         email: u.email, grade_level: parseInt(u.grades || u.grade || '9', 10) || null,
-        primary_org_sourced_id: effectiveOrgSourcedId,
+        _or_candidate_org_sids: candidateOrgSids,
         is_active: isUserActive,
       });
     } else if (effectiveRoleStr === 'teacher') {
       teachers.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
-        primary_org_sourced_id: effectiveOrgSourcedId,
+        _or_candidate_org_sids: candidateOrgSids,
         oneroster_role: 'teacher',
         is_active: isUserActive,
       });
     } else {
       // Aides land here too (treated as non-instructional staff to match
-      // Clever's split). Skip pure parent/guardian/relative rows.
+      // Clever's split). Skip pure parent/guardian/relative rows here —
+      // they may still get rescued below if they have student enrollments.
       if (skippableSet.has(effectiveRoleStr)) continue;
 
       staff.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
-        primary_org_sourced_id: effectiveOrgSourcedId,
+        _or_candidate_org_sids: candidateOrgSids,
         oneroster_role: effectiveRoleStr,
         title: u.title || null,
         is_active: isUserActive,
       });
     }
   }
+
+  // Rescue pass: OneRoster sometimes tags a real student's primary role as
+  // 'guardian' or 'relative' (or leaves it blank). If they have an enrollment
+  // with role='student', they ARE a student. Re-classify them and remove from
+  // staff/teachers if they slipped in there earlier.
+  const knownUserSids = new Set<string>();
+  for (const s of students) knownUserSids.add(s.oneroster_user_sourced_id);
+  for (const t of teachers) knownUserSids.add(t.oneroster_user_sourced_id);
+  for (const s of staff)    knownUserSids.add(s.oneroster_user_sourced_id);
+
+  const enrolledStudentSids = new Set<string>();
+  for (const e of (d.enrollments ?? [])) {
+    if (String(e.role || '').toLowerCase() === 'student' && e.user?.sourcedId) {
+      enrolledStudentSids.add(e.user.sourcedId);
+    }
+  }
+
+  let rescuedAsStudents = 0;
+  const studentSidSet = new Set(students.map((s: any) => s.oneroster_user_sourced_id));
+  for (const u of (d.users ?? [])) {
+    const sid = u.sourcedId;
+    if (!enrolledStudentSids.has(sid)) continue;
+    if (studentSidSet.has(sid)) continue;
+    const userStatus = String(u.status || 'active').toLowerCase();
+    if (userStatus === 'tobedeleted') continue;
+
+    const roles = Array.isArray(u.roles) ? u.roles : [];
+    const primaryEntry =
+         roles.find((r: any) => String(r.roleType || '').toLowerCase() === 'primary')
+      || roles[0]
+      || null;
+
+    students.push({
+      oneroster_user_sourced_id: sid,
+      student_id: u.identifier || u.username || sid,
+      first_name: u.givenName, last_name: u.familyName,
+      email: u.email, grade_level: parseInt(u.grades || u.grade || '9', 10) || null,
+      _or_candidate_org_sids: buildCandidateOrgSids(u, roles, primaryEntry),
+      is_active: userStatus === 'active',
+    });
+    studentSidSet.add(sid);
+    rescuedAsStudents++;
+
+    // Make sure they don't also linger in teachers/staff (e.g. tagged 'aide'
+    // but enrolled as student elsewhere).
+    const tIdx = teachers.findIndex((x: any) => x.oneroster_user_sourced_id === sid);
+    if (tIdx >= 0) teachers.splice(tIdx, 1);
+    const sIdx = staff.findIndex((x: any) => x.oneroster_user_sourced_id === sid);
+    if (sIdx >= 0) staff.splice(sIdx, 1);
+  }
   counts.users = (d.users ?? []).length;
   counts.students = students.length;
   counts.teachers = teachers.length;
   counts.staff = staff.length;
+  if (rescuedAsStudents) (counts as any).rescued_students = rescuedAsStudents;
 
   const student_enrollments: any[] = [];
   const teacher_class_assignments: any[] = [];
@@ -428,18 +502,30 @@ async function upsertMapped(admin: any, mapped: { records: Record<string, any[]>
   const campusMap = new Map<string, string>();
   await upsertChunked(admin, 'campuses', r.campuses, 'oneroster_org_sourced_id', campusMap);
 
-  // Resolve primary-org -> campus_id for users
+  // Resolve each user's campus_id by walking their candidate org sids and
+  // picking the first one that matches a real synced campus. Then strip
+  // the temp field before upsert.
+  const pickCampus = (sids?: string[]): string | undefined => {
+    if (!sids?.length) return undefined;
+    for (const sid of sids) {
+      if (campusMap.has(sid)) return campusMap.get(sid);
+    }
+    return undefined;
+  };
   for (const t of r.teachers ?? []) {
-    if (t.primary_org_sourced_id && campusMap.has(t.primary_org_sourced_id)) t.campus_id = campusMap.get(t.primary_org_sourced_id);
-    delete t.primary_org_sourced_id;
+    const cid = pickCampus(t._or_candidate_org_sids);
+    if (cid) t.campus_id = cid;
+    delete t._or_candidate_org_sids;
   }
   for (const s of r.students ?? []) {
-    if (s.primary_org_sourced_id && campusMap.has(s.primary_org_sourced_id)) s.campus_id = campusMap.get(s.primary_org_sourced_id);
-    delete s.primary_org_sourced_id;
+    const cid = pickCampus(s._or_candidate_org_sids);
+    if (cid) s.campus_id = cid;
+    delete s._or_candidate_org_sids;
   }
   for (const st of r.staff ?? []) {
-    if (st.primary_org_sourced_id && campusMap.has(st.primary_org_sourced_id)) st.campus_id = campusMap.get(st.primary_org_sourced_id);
-    delete st.primary_org_sourced_id;
+    const cid = pickCampus(st._or_candidate_org_sids);
+    if (cid) st.campus_id = cid;
+    delete st._or_candidate_org_sids;
   }
 
   // 2) School years + terms
