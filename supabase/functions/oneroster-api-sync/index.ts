@@ -102,12 +102,16 @@ Deno.serve(async (req: Request) => {
       actorEmail,
       error: warnings.length ? warnings.join('; ') : null,
       row_counts,
-      details: { started_at: startedAt, base_url: baseUrl, sample_urls: sampleUrls(baseUrl) },
+      details: {
+        started_at: startedAt, base_url: baseUrl,
+        sample_urls: sampleUrls(baseUrl),
+        role_breakdown: mapped.roleStats || {},
+      },
     });
 
     return json(200, {
       ok: true, run_id: runId, status: warnings.length ? 'partial' : 'success',
-      row_counts, warnings,
+      row_counts, warnings, role_breakdown: mapped.roleStats || {},
     });
   } catch (err: any) {
     const msg = err?.message || String(err);
@@ -254,27 +258,39 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   const students: any[] = [];
   const teachers: any[] = [];
   const staff: any[] = [];
+  const roleStats: Record<string, number> = {}; // diagnostic: primaryRole -> count
   for (const u of (d.users ?? [])) {
     // Item 1: Only pull active users
     const userStatus = String(u.status || 'active').toLowerCase();
     if (userStatus !== 'active') continue;
 
     const roles = Array.isArray(u.roles) ? u.roles : [];
-    const roleStrs = roles.length
-      ? roles.map((r: any) => String(r.role || r).toLowerCase())
-      : [String(u.role || '').toLowerCase()];
 
-    // Each OneRoster user role carries its own `org.sourcedId`. Take the
-    // first org from any role, falling back to primaryOrg / orgs[0].
-    const orgFromRole = roles.find((r: any) => r?.org?.sourcedId)?.org?.sourcedId;
+    // Use the OneRoster `roleType=primary` role to bucket the user. Many
+    // admin staff (principals, asst principals, academic coaches) ALSO carry
+    // a secondary teaching role for backup coverage; they should still be
+    // staff. Falls back to first role, then top-level user.role.
+    const primaryEntry =
+         roles.find((r: any) => String(r.roleType || '').toLowerCase() === 'primary')
+      || roles[0]
+      || null;
+    const primaryRoleStr = primaryEntry
+      ? String(primaryEntry.role || '').toLowerCase()
+      : String(u.role || '').toLowerCase();
+
+    roleStats[primaryRoleStr || '(none)'] = (roleStats[primaryRoleStr || '(none)'] || 0) + 1;
+
+    // Pick org from primary role first; fall back to any role / primaryOrg.
+    const orgFromPrimary = primaryEntry?.org?.sourcedId;
     const primaryOrgSourcedId =
-         orgFromRole
+         orgFromPrimary
+      || roles.find((r: any) => r?.org?.sourcedId)?.org?.sourcedId
       || (Array.isArray(u.primaryOrg) ? u.primaryOrg[0]?.sourcedId : u.primaryOrg?.sourcedId)
       || u.primaryOrgSourcedId
       || (Array.isArray(u.orgs) ? u.orgs[0]?.sourcedId : null)
       || null;
 
-    if (roleStrs.some(r => r === 'student')) {
+    if (primaryRoleStr === 'student') {
       students.push({
         oneroster_user_sourced_id: u.sourcedId,
         student_id: u.identifier || u.username || u.sourcedId,
@@ -283,8 +299,7 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
         primary_org_sourced_id: primaryOrgSourcedId,
         is_active: true,
       });
-    } else if (roleStrs.some(r => r === 'teacher' || r === 'aide')) {
-      // Clever-style: anyone with a teaching role is a teacher.
+    } else if (primaryRoleStr === 'teacher' || primaryRoleStr === 'aide') {
       teachers.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
@@ -292,18 +307,14 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
         is_active: true,
       });
     } else {
-      // Everyone else with a non-empty role = staff (principals, asst.
-      // principals, academic coaches, district office, proctors, counselors).
-      // Skip explicit non-school roles.
       const nonStaff = new Set(['parent', 'guardian', 'relative', '']);
-      const primaryRole = roleStrs.find(r => !nonStaff.has(r)) || null;
-      if (!primaryRole) continue;
+      if (nonStaff.has(primaryRoleStr)) continue;
 
       staff.push({
         oneroster_user_sourced_id: u.sourcedId,
         first_name: u.givenName, last_name: u.familyName, email: u.email,
         primary_org_sourced_id: primaryOrgSourcedId,
-        oneroster_role: primaryRole,
+        oneroster_role: primaryRoleStr,
         title: u.title || null,
         is_active: true,
       });
@@ -335,6 +346,7 @@ function mapOneRosterToOperational(d: Record<string, any[]>) {
   return {
     records: { campuses, school_years, terms, courses, course_sections, students, teachers, staff, student_enrollments, teacher_class_assignments },
     counts,
+    roleStats,
   };
 }
 
