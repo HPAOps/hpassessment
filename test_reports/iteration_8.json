@@ -1,0 +1,75 @@
+{
+  "summary": "P0 curl probe of all 4 new RPCs (get_or_create_daily_code, admin_regenerate_daily_code, admin_create_makeup_code, redeem_test_code) confirms the SQL block is STILL NOT APPLIED. Every endpoint returns HTTP 404 with PostgREST error code PGRST202 ('Could not find the function ... in the schema cache'). Per the agent-to-agent context note, testing was halted at this point; the full P1 staff/student daily-code flow CANNOT be verified until the user runs the SQL. Frontend code paths that depend on these RPCs (Code button on /admin/tests, Make-up code dialog on /admin/sections/:id, /student/test-code/... redeem flow) will all surface the underlying 404 to the user. Once the SQL is applied, a re-run of this iteration is required.",
+  "sql_not_applied": true,
+  "rpc_probe_results": {
+    "get_or_create_daily_code": {
+      "http_status": 404,
+      "code": "PGRST202",
+      "message": "Could not find the function public.get_or_create_daily_code without parameters in the schema cache"
+    },
+    "admin_regenerate_daily_code": {
+      "http_status": 404,
+      "code": "PGRST202",
+      "message": "Could not find the function public.admin_regenerate_daily_code without parameters in the schema cache"
+    },
+    "admin_create_makeup_code": {
+      "http_status": 404,
+      "code": "PGRST202",
+      "message": "Could not find the function public.admin_create_makeup_code without parameters in the schema cache"
+    },
+    "redeem_test_code": {
+      "http_status": 404,
+      "code": "PGRST202",
+      "message": "Could not find the function public.redeem_test_code(p_code) in the schema cache"
+    }
+  },
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "rpc/get_or_create_daily_code", "issue": "404 PGRST202 — function does not exist in DB", "priority": "CRITICAL"},
+      {"endpoint": "rpc/admin_regenerate_daily_code", "issue": "404 PGRST202 — function does not exist in DB", "priority": "CRITICAL"},
+      {"endpoint": "rpc/admin_create_makeup_code", "issue": "404 PGRST202 — function does not exist in DB", "priority": "CRITICAL"},
+      {"endpoint": "rpc/redeem_test_code", "issue": "404 PGRST202 — function does not exist in DB", "priority": "CRITICAL"}
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Staff /admin/tests → click 'Code'",
+        "issue": "Calls supabase.rpc('get_or_create_daily_code') which currently 404s; UI will surface either an error toast or — on supabase-js@2.105.1 — the misleading 'body stream already read' wrapper. User-reported error reproduces because of this.",
+        "affected_selectors": ["button:has-text('Code')", "DailyCodeDialog"]
+      },
+      {
+        "flow": "Staff /admin/sections/:id → 'Make-up code'",
+        "issue": "Calls supabase.rpc('admin_create_makeup_code') which currently 404s; cannot generate a make-up code.",
+        "affected_selectors": ["MakeupDialog", "button:has-text('Make-up code')"]
+      },
+      {
+        "flow": "Student /student/test-code/:enrollmentId/:testId/:phase",
+        "issue": "Calls rpcDirect('redeem_test_code', {p_code}) which currently 404s; no daily code can be redeemed; the entire test-launch path is broken end-to-end.",
+        "affected_selectors": ["StudentTestCode 6-box code prompt", "Continue button"]
+      }
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "USER ACTION REQUIRED: Apply the pending SQL block that creates the 4 RPCs (get_or_create_daily_code, admin_regenerate_daily_code, admin_create_makeup_code, redeem_test_code) plus any supporting tables/columns to the Supabase DB. Schema cache may also need a reload (NOTIFY pgrst, 'reload schema'; or a Supabase dashboard restart) once SQL is applied.",
+    "After SQL is applied, re-trigger this same testing pass to validate the full P0/P1 staff + student flows.",
+    "Optional hardening for E1: in DailyCodeDialog/MakeupDialog catch blocks, surface the PostgREST error.message instead of letting supabase-js's 'body stream already read' wrapper bubble up — gives clearer UX if a future RPC mishap occurs."
+  ],
+  "critical_code_review_comments": [
+    "redeem_test_code is correctly routed via rpcDirect() (XHR) which avoids the supabase-js@2.105.1 fetch body-stream double-read bug — good defensive choice.",
+    "Staff-side RPCs (get_or_create_daily_code, admin_regenerate_daily_code, admin_create_makeup_code) still go through supabase.rpc(); on any RPC error the user may see the obscure 'body stream already read' instead of the real Postgres error. Consider switching these to rpcDirect() too, or wrapping them in a helper that re-fetches the response text on failure.",
+    "Cannot evaluate UI render behaviour of the new StudentTestCode 6-box prompt page until SQL is applied (the page never gets a successful redeem to land on /student/test/:attemptId)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "0% (4/4 RPCs missing)", "frontend": "not tested — blocked"},
+  "test_credentials": "super@hpa.test / HPATestUser123 (staff break-glass), Student ID 300699 (Daania Abdulbari) — read from /app/memory/test_credentials.md",
+  "seed_data_creation": "None",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Re-probe the 4 RPCs first using the curl commands in this report. If they now return 200/4xx-with-JSON-body (instead of 404 PGRST202), proceed with the full P0/P1 flow as outlined in the original review_request: (1) staff Code button on /admin/tests Biology 1 row → 6-char code modal → New code regenerate, (2) student Daania 300699 → Pre-AP Biology 1 → teacher verify → Biology 1 EOC → /student/test-code/... 6-box prompt → enter code → land on /student/test/:attemptId Q1/42, (3) wrong-code rejection 'AAAAAA', (4) staff /admin/sections → Make-up code → student redeems make-up code, (5) regression sanity on /admin/tests, /admin/sections, /admin/sections/:id, /admin/dashboard, /admin/campuses. The character set for codes is A-HJ-NP-Z2-9 (no I, O, 0, 1).",
+  "rca_of_the_issue": "Root cause: the SQL block defining the 4 PostgreSQL functions (get_or_create_daily_code, admin_regenerate_daily_code, admin_create_makeup_code, redeem_test_code) was never executed against the Supabase project (soaagmzmecutvlxfbscl). PostgREST's schema cache returns PGRST202 for any RPC name it can't resolve. Reproduction: `curl -X POST $SUPA/rest/v1/rpc/<fn> -H 'apikey: <anon>' -H 'Authorization: Bearer <anon>' -H 'Content-Type: application/json' -d '{}'` returns HTTP 404 with PGRST202 for all four. Mitigation: user runs the prepared SQL block in the Supabase SQL editor (or via psql) and, if needed, issues `NOTIFY pgrst, 'reload schema';` to force PostgREST to pick up the new functions. Once applied the same curl probes must return 200 (or 4xx with a structured app-level error envelope) — at that point the frontend Code button, Make-up dialog, and student code-prompt pages should function end-to-end."
+}
