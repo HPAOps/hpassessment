@@ -604,25 +604,22 @@ export async function redeemTestCode(code, studentDbId, testId, sectionId) {
 
 export async function getOrCreateDailyCode(testId) {
   if (isDemoMode) return { code: "DEMO42", source: "auto" };
-  const { data, error } = await supabase.rpc("get_or_create_daily_code", { p_test_id: testId });
-  if (error) throw error;
-  return data;
+  // Use rpcDirect (XHR-based) instead of supabase.rpc to bypass the
+  // supabase-js@2.105.1 body-stream double-read bug. Real PostgREST errors
+  // (e.g. function-not-found 404) come through with clear messages.
+  return await rpcDirect("get_or_create_daily_code", { p_test_id: testId });
 }
 
 export async function regenerateDailyCode(testId) {
   if (isDemoMode) return { code: "DEMO99", source: "admin_regenerate" };
-  const { data, error } = await supabase.rpc("admin_regenerate_daily_code", { p_test_id: testId });
-  if (error) throw error;
-  return data;
+  return await rpcDirect("admin_regenerate_daily_code", { p_test_id: testId });
 }
 
 export async function createMakeupCode(testId, studentDbId, bypassWaitingRoom = true) {
   if (isDemoMode) return { code: "MAKEUP", source: "admin_makeup", for_student_id: studentDbId };
-  const { data, error } = await supabase.rpc("admin_create_makeup_code", {
+  return await rpcDirect("admin_create_makeup_code", {
     p_test_id: testId, p_student_db_id: studentDbId, p_bypass_waiting_room: bypassWaitingRoom,
   });
-  if (error) throw error;
-  return data;
 }
 
 function getAttemptSecret(attemptId) {
