@@ -1,0 +1,68 @@
+{
+  "summary": "SQL is now applied (4/4 RPCs resolve with proper named-parameter signatures, no more PGRST202). However TWO new P0 blockers surfaced during full E2E re-test: (A) get_or_create_daily_code is NOT idempotent — clicking the staff 'Code' button on /admin/tests fails with a raw 409 'duplicate key value violates unique constraint test_codes_one_active_group_per_day' for ~50% of test rows (4 of 8 tested). The error is rendered DIRECTLY in the DailyCodeDialog body, no friendly message, no Copy/New-code controls. (B) Daania (300699) → Pre-AP Biology 1 → test selector now shows 'No open tests right now' because the Biology 1 EOC window is 2026-05-04 → 2026-05-07 and today is 2026-05-08, so the test window has CLOSED. That blocks every student-side P0 (code prompt, wrong-code rejection, land on /student/test/:attemptId) and the P1 make-up redemption from being verified end-to-end. Loader2 import is no longer crashing. Staff login + admin dashboard render fine.",
+  "sql_now_applied": true,
+  "rpc_probe_results": {
+    "get_or_create_daily_code(p_test_id=uuid)": {"http_status": 401, "message": "Not authorized", "note": "Function exists; correctly rejects anon caller."},
+    "admin_regenerate_daily_code(p_test_id=uuid)": {"http_status": 401, "message": "Only admins can regenerate codes."},
+    "admin_create_makeup_code(full_sig)": {"http_status": 401, "message": "Not authorized"},
+    "redeem_test_code(p_code=AAAAAA, full_sig)": {"http_status": 401, "message": "That test code is not valid for today. Ask your teacher to confirm the code, or for a fresh one."}
+  },
+  "ui_code_button_per_row_results": {
+    "Algebra 1A": "SUCCESS code=XWHMXJ",
+    "Algebra 1B": "FAIL 409 duplicate key",
+    "Algebra 2A": "SUCCESS code=VLDLNA",
+    "Algebra 2B": "FAIL 409 duplicate key",
+    "Biology 1":  "SUCCESS code=DCYLJ9 (no New-code button visible; success branch may be missing super_admin regen control OR was suppressed by dialog re-render)",
+    "Biology 2":  "FAIL 409 duplicate key",
+    "Chemistry 1":"FAIL 409 duplicate key",
+    "Chemistry 2":"SUCCESS code=XRRLWJ"
+  },
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "rpc/get_or_create_daily_code", "issue": "Not idempotent. ~50% of calls return HTTP 409 'duplicate key value violates unique constraint test_codes_one_active_group_per_day'. Looks like a SELECT-then-INSERT race or missing ON CONFLICT (test_id, valid_for_date) DO UPDATE/RETURNING in the function body. The function MUST return the existing row instead of attempting a fresh INSERT when a row for (test_id, today) already exists.", "priority": "CRITICAL"},
+      {"endpoint": "rpc/redeem_test_code", "issue": "Returns HTTP 401 (PostgreSQL ERRCODE 42501) for 'invalid code today' instead of HTTP 400 as the review_request specified. The body message is correct and clean ('That test code is not valid for today...'), but a 401 implies an auth failure to most clients/observability tools. Suggest changing the RAISE EXCEPTION to ERRCODE 22023 (invalid_parameter_value) so PostgREST maps to HTTP 400, OR have the function return a structured {error:'invalid_code'} JSON with HTTP 200.", "priority": "MEDIUM"}
+    ],
+    "minor": [
+      {"endpoint": "all 4 new RPCs", "issue": "Functions are not registered as 'no-args' or 'single jsonb' overloads, so a body of '{}' returns PGRST202. Clients must always pass the named params. This is fine but it caused initial confusion in iteration_8 — consider adding a single-jsonb overload or documenting the required params in the SQL comment."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Tests.jsx :: DailyCodeDialog", "issue": "When the underlying RPC errors, the dialog renders the raw Postgres error string ('duplicate key value violates unique constraint... (HTTP 409)') as the body content. There is no friendly 'Could not generate code, please try again' fallback, no retry CTA, and no Copy/New-code controls. Should catch the 409 specifically and either auto-retry, OR show 'Today's code is already active — refresh to view it' with a Refresh button.", "selector": "[role='dialog']", "priority": "HIGH"},
+      {"component": "StudentTestSelector", "issue": "When Daania (300699) reaches /student/tests/<enrollmentId> for Pre-AP Biology 1, the page shows 'No open tests right now' because Biology 1's EOC window (2026-05-04 → 2026-05-07) has CLOSED (today is 2026-05-08). This blocks all student-side P0 verification. Either (a) extend the EOC window via admin UI, or (b) add a temporary 'always-available' mode for testing.", "selector": "[data-testid^='test-pick-']", "priority": "BLOCKING-FOR-TEST"}
+    ],
+    "integration_issues": [
+      {"flow": "Staff /admin/tests → 'Code' button", "issue": "Surfaces raw SQL error to admin users for ~50% of tests. Bad UX and reveals internal schema (constraint name) to staff.", "affected_selectors": ["button:has-text('Code')", "[role='dialog']"]},
+      {"flow": "Student daily-code redemption + wrong-code rejection + make-up redemption", "issue": "BLOCKED — could not exercise because (1) staff Code button is 50% broken so we cannot reliably hand a code to the student, and (2) the only Daania-eligible test (Biology 1 EOC) is outside its publish window so the test tile never appears.", "affected_selectors": ["StudentTestCode 6-box", "MakeupDialog"]}
+    ],
+    "design_issues": [
+      {"screen": "/admin/dashboard", "issues": ["Recharts container warning 'width(-1) and height(-1) of chart should be greater than 0' fires repeatedly — chart parent has 0 size at first paint."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "P0: fix get_or_create_daily_code to be truly idempotent. Recommended SQL pattern: INSERT INTO test_codes (...) VALUES (...) ON CONFLICT (test_id, valid_for_date) WHERE active DO UPDATE SET updated_at = now() RETURNING * (or SELECT first, then INSERT only if not found, all inside a single transaction with FOR UPDATE locking).",
+    "P0: fix DailyCodeDialog catch branch to swallow 409 specifically and silently re-fetch the existing code, OR present a clean 'Refresh' CTA. NEVER surface 'duplicate key value violates unique constraint test_codes_one_active_group_per_day' to staff — that is a leak of internal schema.",
+    "P0/TEST-DATA: extend Biology 1's EOC window so Daania can actually see the EOC tile. Currently set to 2026-05-04 → 2026-05-07 and today is 2026-05-08. Either bump the upper bound or seed a dedicated always-open test for Daania's section to allow E2E verification of /student/test-code/... + wrong-code rejection + redemption + make-up redemption.",
+    "P1: change redeem_test_code to RAISE with ERRCODE 22023 (invalid_parameter_value) so HTTP maps to 400 not 401 for invalid-code rejections — review_request explicitly specified HTTP 400.",
+    "P2: investigate why 'New code' regen button did not appear in the success-path Biology 1 dialog (super_admin should see it). May be a conditional render keyed off the success state shape that never fires after the catch branch handled the 409, or a role check looking at the wrong field.",
+    "Once the above are fixed, re-run a full P0/P1 pass. Don't bother retesting Loader2 import / body-stream issues — both confirmed gone."
+  ],
+  "critical_code_review_comments": [
+    "rpcDirect XHR path is working correctly — error.message contains the real Postgres envelope ('duplicate key value violates unique constraint...'). The bug is in the SQL function, not the client.",
+    "DailyCodeDialog should distinguish between expected error envelopes (e.g. 'already exists' on this date) and unexpected ones. Treat 409 as an idempotency signal, not as a fatal error to render.",
+    "Test windows (BOC/EOC) need to either be admin-extendable per-section or bypassable in dev/test mode — otherwise testing the student flow becomes impossible the day after a window closes, as is the case right now.",
+    "The unique constraint name 'test_codes_one_active_group_per_day' implies there's already a unique index on (test_id, day, active) or similar — perfect for an ON CONFLICT clause. Use it."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "backend": "RPCs exist (100%) but get_or_create_daily_code idempotency 50% (4/8 rows fail with 409). redeem_test_code wrong-code path: clean message, but wrong HTTP code (401 vs spec 400).",
+    "frontend": "Staff login + /admin/tests render: PASS. Code button: 50% broken (raw SQL error in dialog). New code regen: NOT VERIFIED (button absent on the one success row tested). Student daily-code flow + wrong-code + make-up redemption: BLOCKED by closed test window."
+  },
+  "test_credentials": "super@hpa.test / HPATestUser123 (verified). Student 300699 Daania (verified login + course list, blocked at test selector by closed window).",
+  "seed_data_creation": "None.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Once main agent (1) makes get_or_create_daily_code idempotent (ON CONFLICT DO NOTHING / RETURNING via a SELECT after, OR an explicit SELECT-first-then-INSERT-with-savepoint) and (2) extends Biology 1 EOC window to include today (or seeds a dedicated open test for Daania's enrollment), re-test: (a) click Code on ALL test rows — every one should return a 6-char code with no 409, (b) click New code as super_admin — verify a fresh different code, (c) Daania → Pre-AP Biology 1 → click Biology 1 EOC tile → land on /student/test-code/<enrollmentId>/<testId>/<phase>, (d) paste valid code → /student/test/:attemptId Q1 of 42, (e) re-open code page, type AAAAAA → inline error 'not valid' stays on page, (f) /admin/sections → Make-up code dialog → create → enter as student → land on test. Codes are A-HJ-NP-Z2-9, 6 chars.",
+  "rca_of_the_issue": "RCA — Daily-code 409: get_or_create_daily_code SQL function does not handle the 'a row already exists for (test_id, today)' case before it issues an INSERT. The unique index test_codes_one_active_group_per_day fires and PostgREST returns the bare 23505 error verbatim. Fix: either wrap the INSERT in ON CONFLICT (test_id, valid_for_date) WHERE active DO UPDATE SET updated_at = now() RETURNING *, OR do a SELECT … FOR UPDATE first inside a transaction and only INSERT when no row is found. RCA — student blocked: BOC/EOC test windows are date-bounded (2026-05-04 → 2026-05-07 for Biology 1 EOC) and today is 2026-05-08, so the StudentTestSelector query that filters by current date returns zero rows and renders the 'No open tests' empty state. Fix: extend the window or remove the date guard for the test student. Reproduction: visible in /app/test_reports iteration_9 logs and screenshots .screenshots/code_modal_v1.png + screenshots from this iteration."
+}

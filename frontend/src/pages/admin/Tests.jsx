@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Plus, Eye, Pencil, Trash2, KeyRound, RefreshCcw, Copy } from "lucide-react";
+import { Plus, Eye, Pencil, Trash2, KeyRound, RefreshCcw, Copy, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   listCourses, listTests, createTest, updateTest, deleteTest,
