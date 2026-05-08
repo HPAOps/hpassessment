@@ -422,13 +422,25 @@ function DailyCodeDialog({ test, isAdmin, onClose }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    let alive = true;
-    getOrCreateDailyCode(test.id)
-      .then(r => { if (alive) setRow(r); })
-      .catch(e => { if (alive) { setError(e.message || String(e)); setRow({}); } });
-    return () => { alive = false; };
-  }, [test.id]);
+  async function loadCode() {
+    setError(null);
+    try {
+      const r = await getOrCreateDailyCode(test.id);
+      setRow(r);
+    } catch (e) {
+      const msg = e?.message || String(e);
+      // The RPC is now idempotent via an advisory lock so 23505 should never
+      // surface. But if it ever does (older RPC, schema drift), present a
+      // friendly fallback instead of a raw Postgres envelope.
+      if (/duplicate key|23505/i.test(msg)) {
+        setError("Today's code is being prepared by another tab. Click Refresh to load it.");
+      } else {
+        setError(msg.replace(/\s*\(HTTP \d+\)\s*$/, ""));
+      }
+      setRow({}); // not loading anymore
+    }
+  }
+  useEffect(() => { loadCode(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [test.id]);
 
   async function onRegenerate() {
     if (!isAdmin || busy) return;
@@ -437,6 +449,7 @@ function DailyCodeDialog({ test, isAdmin, onClose }) {
     try {
       const r = await regenerateDailyCode(test.id);
       setRow(r);
+      setError(null);
       toast.success("New code generated");
     } catch (e) {
       toast.error(e?.message || "Could not regenerate code");
@@ -463,13 +476,20 @@ function DailyCodeDialog({ test, isAdmin, onClose }) {
         <DialogDescription>{test.name} — valid for {dateLabel}.</DialogDescription>
       </DialogHeader>
 
-      {error && <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>}
+      {error && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-4 space-y-3">
+          <div className="text-sm text-amber-900">{error}</div>
+          <Button variant="outline" size="sm" onClick={() => { setRow(null); loadCode(); }} data-testid="code-retry">
+            <RefreshCcw className="h-3.5 w-3.5 mr-1" /> Refresh
+          </Button>
+        </div>
+      )}
 
       {!row && !error && (
         <div className="py-10 text-center text-muted-foreground"><Loader2 className="inline h-5 w-5 animate-spin mr-2" /> Loading…</div>
       )}
 
-      {row?.code && (
+      {row?.code && !error && (
         <div className="space-y-3">
           <div className="rounded-lg border-2 border-border bg-secondary/40 py-8 px-4 text-center">
             <div className="font-mono font-bold tracking-[0.4em] text-4xl sm:text-5xl select-all" data-testid="daily-code-display">
