@@ -103,7 +103,9 @@ export default function StudentTestCode() {
     setSubmitting(true);
     try {
       const a = await redeemTestCode(code, student.id, testId, item.section.id);
-      nav(`/student/test/${a.id}`, { replace: true });
+      // P2: route into the waiting room if the attempt isn't running yet.
+      const next = a.status === "waiting" ? `/student/waiting/${a.id}` : `/student/test/${a.id}`;
+      nav(next, { replace: true });
     } catch (err) {
       const msg = err?.message || err?.details || err?.hint || JSON.stringify(err);
       setError(msg.replace(/\s*\(HTTP \d+\)\s*$/, ""));

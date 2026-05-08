@@ -622,6 +622,33 @@ export async function createMakeupCode(testId, studentDbId, bypassWaitingRoom = 
   });
 }
 
+// ---------------------------------------------------------------------------
+// P2 -- Test sessions / waiting room / proctor controls
+// ---------------------------------------------------------------------------
+export async function teacherGetOrCreateSession(testId, sectionId, phase) {
+  if (isDemoMode) return null;
+  return await rpcDirect("teacher_get_or_create_session", {
+    p_test_id: testId, p_section_id: sectionId, p_phase: phase,
+  });
+}
+
+export async function teacherSessionState(sessionId) {
+  if (isDemoMode) return { session: null, attempts: [], roster_not_joined: [] };
+  return await rpcDirect("teacher_session_state", { p_session_id: sessionId });
+}
+
+export async function teacherStartSession(sessionId) {
+  return await rpcDirect("teacher_start_session", { p_session_id: sessionId });
+}
+
+export async function teacherEndSession(sessionId) {
+  return await rpcDirect("teacher_end_session", { p_session_id: sessionId });
+}
+
+export async function teacherPauseAttempt(attemptId, reason = null) {
+  return await rpcDirect("teacher_pause_attempt", { p_attempt_id: attemptId, p_reason: reason });
+}
+
 function getAttemptSecret(attemptId) {
   try {
     const cache = JSON.parse(localStorage.getItem("hpa.attemptSecrets") || "{}");

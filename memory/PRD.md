@@ -186,6 +186,34 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   code-prompt page that confirms student name + test before validating via
   `redeem_test_code`. Wrong code → friendly inline error, no page crash.
 
+## Phase H — P2 Waiting room + live proctor (2026-02)
+
+- New `test_sessions` table (one active per `(test, section, phase)`) +
+  per-attempt `session_id`, `is_paused`, `paused_at`, `paused_reason`,
+  `current_question_index` columns.
+- `redeem_test_code` is now session-aware: group codes and non-bypass
+  make-up codes create/join the active session and the resulting attempt
+  starts in `waiting` status. Bypass make-ups skip the session entirely
+  (1:1 admin-issued codes).
+- New RPCs: `teacher_get_or_create_session`, `teacher_session_state`,
+  `teacher_start_session`, `teacher_end_session`, `teacher_pause_attempt`,
+  `_internal_score_and_submit` (extracted scorer reused by submit + end).
+- `save_response` now updates `current_question_index` and rejects when
+  `is_paused = true`.
+- **Student waiting room** (`/student/waiting/:attemptId`) — polls every
+  3s; auto-redirects to the test page when the teacher clicks Start;
+  renders a friendly "Test paused — ask your teacher for a make-up code"
+  message when paused.
+- **Proctor view** (`/admin/sections/:sectionId/proctor/:testId/:phase`):
+  - Big readable daily code at the top with copy
+  - Counts: roster / joined / working / submitted / paused
+  - Live roster table with per-student progress bar + score column
+  - Start, End, Pause-individual buttons with confirmation dialogs
+  - Polls session state every 4s; manual Refresh button
+- **Section roster** has a new "Proctor a test" panel that lists every
+  test linked to the section's course with one BOC + one EOC button per
+  test, launching the proctor view directly.
+
 ## Implemented (v1) — completion date 2026-02
 
 

@@ -31,6 +31,13 @@ export default function StudentTest() {
         const data = await getStudentAttempt(attemptId, student.id);
         if (!alive) return;
         if (!data || !data.attempt) { nav("/student/courses", { replace: true }); return; }
+        // P2: if the teacher hasn't started the session yet, send the
+        // student to the waiting room. If the teacher paused them, also
+        // bounce -- the waiting room renders a "test paused" message.
+        if (data.attempt.status === "waiting" || data.attempt.is_paused) {
+          nav(`/student/waiting/${data.attempt.id}`, { replace: true });
+          return;
+        }
         if (data.attempt.status === "submitted") { nav(`/student/submitted/${data.attempt.id}`, { replace: true }); return; }
         setAttempt(data.attempt);
         setTest(data.test);
@@ -71,6 +78,13 @@ export default function StudentTest() {
       lastSavedRef.current = Date.now();
     } catch (e) {
       const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
+      // The teacher may have just paused this attempt. Bounce to the waiting
+      // room which knows how to render a friendly "Your test was paused"
+      // message instead of toasting a cryptic SQL error.
+      if (/paused|not in progress|invalid session/i.test(msg)) {
+        nav(`/student/waiting/${attempt.id}`, { replace: true });
+        return;
+      }
       toast.error("Could not save your answer: " + msg);
     } finally {
       setSaving(false);

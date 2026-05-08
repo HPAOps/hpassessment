@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getSectionDetail, getSectionRoster, listTests, listTestCourses, createMakeupCode } from "@/lib/api";
-import { ArrowLeft, Search, Loader2, Users, KeyRound, Copy } from "lucide-react";
+import { ArrowLeft, Search, Loader2, Users, KeyRound, Copy, Play } from "lucide-react";
 import { toast } from "sonner";
 
 function fullName(s) {
@@ -87,6 +87,35 @@ export default function SectionRoster() {
 
       {section && !error && (
         <>
+          {/* P2: proctor launcher per available test */}
+          {tests.length > 0 && (
+            <Card className="mb-4">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between flex-wrap gap-3">
+                  <div className="text-sm">
+                    <div className="font-medium flex items-center gap-2"><Play className="h-4 w-4" /> Proctor a test</div>
+                    <div className="text-xs text-muted-foreground">Launch a live test session for this class.</div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {tests.map(t => {
+                      const phases = [];
+                      if (t.boc_opens_at) phases.push("BOC");
+                      if (t.eoc_opens_at) phases.push("EOC");
+                      if (phases.length === 0) phases.push("BOC");
+                      return phases.map(ph => (
+                        <Button key={`${t.id}-${ph}`} asChild size="sm" variant="outline" data-testid={`proctor-launch-${t.id}-${ph}`}>
+                          <Link to={`/admin/sections/${section.id}/proctor/${t.id}/${ph}`}>
+                            <Play className="h-3.5 w-3.5 mr-1" /> {t.name} <Badge variant="secondary" className="ml-2">{ph}</Badge>
+                          </Link>
+                        </Button>
+                      ));
+                    })}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           <div className="mb-4 flex items-center gap-3 flex-wrap">
             <Badge variant="secondary" className="gap-1.5">
               <Users className="h-3.5 w-3.5" />

@@ -11,6 +11,7 @@ import StudentCoursePicker from "@/pages/StudentCoursePicker";
 import StudentTeacherVerify from "@/pages/StudentTeacherVerify";
 import StudentTestSelector from "@/pages/StudentTestSelector";
 import StudentTestCode from "@/pages/StudentTestCode";
+import StudentWaitingRoom from "@/pages/StudentWaitingRoom";
 import StudentTest from "@/pages/StudentTest";
 import StudentSubmitConfirm from "@/pages/StudentSubmitConfirm";
 import StaffLogin from "@/pages/StaffLogin";
@@ -31,6 +32,7 @@ import TestPreview from "@/pages/admin/TestPreview";
 import Integrations from "@/pages/admin/Integrations";
 import Sections from "@/pages/admin/Sections";
 import SectionRoster from "@/pages/admin/SectionRoster";
+import Proctor from "@/pages/admin/Proctor";
 
 function App() {
   return (
@@ -45,6 +47,7 @@ function App() {
             <Route path="/student/teacher-verify/:enrollmentId" element={<RequireStudent><StudentTeacherVerify /></RequireStudent>} />
             <Route path="/student/tests/:enrollmentId" element={<RequireStudent><StudentTestSelector /></RequireStudent>} />
             <Route path="/student/test-code/:enrollmentId/:testId/:phase" element={<RequireStudent><StudentTestCode /></RequireStudent>} />
+            <Route path="/student/waiting/:attemptId" element={<RequireStudent><StudentWaitingRoom /></RequireStudent>} />
             <Route path="/student/test/:attemptId" element={<RequireStudent><StudentTest /></RequireStudent>} />
             <Route path="/student/submitted/:attemptId" element={<RequireStudent><StudentSubmitConfirm /></RequireStudent>} />
 
@@ -67,6 +70,7 @@ function App() {
             <Route path="/admin/users" element={<RequireStaff><Users /></RequireStaff>} />
             <Route path="/admin/sections" element={<RequireStaff><Sections /></RequireStaff>} />
             <Route path="/admin/sections/:sectionId" element={<RequireStaff><SectionRoster /></RequireStaff>} />
+            <Route path="/admin/sections/:sectionId/proctor/:testId/:phase" element={<RequireStaff><Proctor /></RequireStaff>} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
