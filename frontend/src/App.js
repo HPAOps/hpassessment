@@ -10,6 +10,7 @@ import StudentLogin from "@/pages/StudentLogin";
 import StudentCoursePicker from "@/pages/StudentCoursePicker";
 import StudentTeacherVerify from "@/pages/StudentTeacherVerify";
 import StudentTestSelector from "@/pages/StudentTestSelector";
+import StudentTestCode from "@/pages/StudentTestCode";
 import StudentTest from "@/pages/StudentTest";
 import StudentSubmitConfirm from "@/pages/StudentSubmitConfirm";
 import StaffLogin from "@/pages/StaffLogin";
@@ -43,6 +44,7 @@ function App() {
             <Route path="/student/courses" element={<RequireStudent><StudentCoursePicker /></RequireStudent>} />
             <Route path="/student/teacher-verify/:enrollmentId" element={<RequireStudent><StudentTeacherVerify /></RequireStudent>} />
             <Route path="/student/tests/:enrollmentId" element={<RequireStudent><StudentTestSelector /></RequireStudent>} />
+            <Route path="/student/test-code/:enrollmentId/:testId/:phase" element={<RequireStudent><StudentTestCode /></RequireStudent>} />
             <Route path="/student/test/:attemptId" element={<RequireStudent><StudentTest /></RequireStudent>} />
             <Route path="/student/submitted/:attemptId" element={<RequireStudent><StudentSubmitConfirm /></RequireStudent>} />
 

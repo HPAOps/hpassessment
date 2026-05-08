@@ -168,6 +168,24 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   try/catch with a real toast and an "expired session → bounce back to
   courses" recovery path.
 
+## Phase G — P1 Daily test codes (2026-02)
+
+- New `test_codes` table + 5 RPCs (`generate_test_code`, `get_or_create_daily_code`,
+  `admin_regenerate_daily_code`, `admin_create_makeup_code`, `redeem_test_code`).
+- 6-char unambiguous alphabet (`A-HJ-NP-Z2-9`, no `I`/`O`/`0`/`1`). Codes are
+  per (test, calendar day in America/Phoenix). Lazy-creation on view, so no
+  cron job required — tomorrow's code is generated the first time anyone
+  asks for it after midnight.
+- **Teacher view**: "Code" button on every test row in `/admin/tests` →
+  reveal-on-click modal with the 6-char code, Copy button, and (admin only)
+  "New code" regenerate.
+- **Admin make-up codes**: per-student "Make-up code" button on the section
+  roster page. Modal lets admin pick the test and a "skip waiting room"
+  toggle (defaults to skip; ready for P2 wiring).
+- **Student gate**: clicking a test on the selector now routes to a 6-box
+  code-prompt page that confirms student name + test before validating via
+  `redeem_test_code`. Wrong code → friendly inline error, no page crash.
+
 ## Implemented (v1) — completion date 2026-02
 
 

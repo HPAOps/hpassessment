@@ -8,11 +8,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Plus, Eye, Pencil, Trash2 } from "lucide-react";
+import { Plus, Eye, Pencil, Trash2, KeyRound, RefreshCcw, Copy } from "lucide-react";
 import { Link } from "react-router-dom";
 import {
   listCourses, listTests, createTest, updateTest, deleteTest,
   listCourseSections, listTestCourses, listSchoolYears,
+  getOrCreateDailyCode, regenerateDailyCode,
 } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
@@ -27,6 +28,8 @@ export default function Tests() {
   const [schoolYears, setSchoolYears] = useState([]);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null); // test row being edited
+  const [codeFor, setCodeFor] = useState(null);  // P1: which test's code dialog is open
+  const isAdmin = ["super_admin","district_admin","campus_admin"].includes(staff?.role);
 
   async function refresh() {
     const [t, c, s, tc, sy] = await Promise.all([
@@ -181,6 +184,9 @@ export default function Tests() {
                       </div>
                     </TableCell>
                     <TableCell className="text-right whitespace-nowrap">
+                      <Button variant="ghost" size="sm" onClick={() => setCodeFor(t)} data-testid={`show-code-${t.id}`}>
+                        <KeyRound className="h-3.5 w-3.5" /> Code
+                      </Button>
                       <Button asChild variant="ghost" size="sm" data-testid={`preview-${t.id}`}>
                         <Link to={`/admin/tests/${t.id}/preview`}><Eye className="h-3.5 w-3.5" /> Preview</Link>
                       </Button>
@@ -216,6 +222,16 @@ export default function Tests() {
             currentCourseIds={courseIdsByTest.get(editing.id) || []}
             onSubmit={onSaveEdit}
             onCancel={() => setEditing(null)}
+          />
+        )}
+      </Dialog>
+
+      <Dialog open={!!codeFor} onOpenChange={o => { if (!o) setCodeFor(null); }}>
+        {codeFor && (
+          <DailyCodeDialog
+            test={codeFor}
+            isAdmin={isAdmin}
+            onClose={() => setCodeFor(null)}
           />
         )}
       </Dialog>
@@ -395,6 +411,89 @@ function NewTestDialog({ courses, sectionsByCourse, schoolYears, onSubmit }) {
         >
           Create test
         </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+
+function DailyCodeDialog({ test, isAdmin, onClose }) {
+  const [row, setRow] = useState(null);   // null = loading
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    getOrCreateDailyCode(test.id)
+      .then(r => { if (alive) setRow(r); })
+      .catch(e => { if (alive) { setError(e.message || String(e)); setRow({}); } });
+    return () => { alive = false; };
+  }, [test.id]);
+
+  async function onRegenerate() {
+    if (!isAdmin || busy) return;
+    if (!window.confirm("Generate a new code for today? The current code will stop working immediately.")) return;
+    setBusy(true);
+    try {
+      const r = await regenerateDailyCode(test.id);
+      setRow(r);
+      toast.success("New code generated");
+    } catch (e) {
+      toast.error(e?.message || "Could not regenerate code");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function copyCode() {
+    if (!row?.code) return;
+    navigator.clipboard?.writeText(row.code);
+    toast.success("Code copied");
+  }
+
+  const displayCode = row?.code || "";
+  const dateLabel = row?.valid_on_date
+    ? new Date(row.valid_on_date + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+    : "today";
+
+  return (
+    <DialogContent className="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle className="font-display">Today's test code</DialogTitle>
+        <DialogDescription>{test.name} — valid for {dateLabel}.</DialogDescription>
+      </DialogHeader>
+
+      {error && <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">{error}</div>}
+
+      {!row && !error && (
+        <div className="py-10 text-center text-muted-foreground"><Loader2 className="inline h-5 w-5 animate-spin mr-2" /> Loading…</div>
+      )}
+
+      {row?.code && (
+        <div className="space-y-3">
+          <div className="rounded-lg border-2 border-border bg-secondary/40 py-8 px-4 text-center">
+            <div className="font-mono font-bold tracking-[0.4em] text-4xl sm:text-5xl select-all" data-testid="daily-code-display">
+              {displayCode}
+            </div>
+          </div>
+          <div className="flex items-center justify-center gap-2">
+            <Button variant="outline" size="sm" onClick={copyCode} data-testid="copy-code">
+              <Copy className="h-3.5 w-3.5 mr-1" /> Copy
+            </Button>
+            {isAdmin && (
+              <Button variant="outline" size="sm" onClick={onRegenerate} disabled={busy} data-testid="regenerate-code">
+                <RefreshCcw className={"h-3.5 w-3.5 mr-1 " + (busy ? "animate-spin" : "")} /> New code
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-center text-muted-foreground">
+            A new code is generated automatically every day at midnight.
+          </p>
+        </div>
+      )}
+
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose} data-testid="code-dialog-close">Close</Button>
       </DialogFooter>
     </DialogContent>
   );

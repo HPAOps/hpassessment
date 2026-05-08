@@ -37,12 +37,12 @@ export default function StudentTestSelector() {
   async function startTest(t) {
     setStarting(t.id);
     try {
-      const a = await findOrCreateAttempt(student.id, t.id, item.section.id);
-      nav(`/student/test/${a.id}`);
+      const phase = t.phase || t.test_type || "BOC";
+      // P1: route through the test-code prompt instead of starting immediately.
+      // The prompt page calls redeem_test_code which validates the code and
+      // (on success) creates/returns the attempt, then nav to /student/test/:id.
+      nav(`/student/test-code/${enrollmentId}/${t.id}/${phase}`);
     } catch (e) {
-      // Supabase errors come back as plain objects with `.message`/`.details`/
-      // `.hint`. Surface a useful string instead of letting the React error
-      // boundary blow up with `[object Object]`.
       const msg = e?.message || e?.details || e?.hint || e?.error_description || JSON.stringify(e);
       toast.error("Could not start the test: " + msg);
       setStarting(null);

@@ -579,6 +579,52 @@ export async function findOrCreateAttempt(studentDbId, testId, courseSectionId) 
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// P1 -- Daily test codes
+// ---------------------------------------------------------------------------
+const cacheAttemptSecret = (data) => {
+  if (data && data.id && data.session_secret) {
+    try {
+      const cache = JSON.parse(localStorage.getItem("hpa.attemptSecrets") || "{}");
+      cache[data.id] = data.session_secret;
+      localStorage.setItem("hpa.attemptSecrets", JSON.stringify(cache));
+    } catch { /* ignore */ }
+  }
+};
+
+export async function redeemTestCode(code, studentDbId, testId, sectionId) {
+  if (isDemoMode) return findOrCreateAttempt(studentDbId, testId, sectionId);
+  const data = await rpcDirect("redeem_test_code", {
+    p_code: code, p_student_db_id: studentDbId,
+    p_test_id: testId, p_section_id: sectionId,
+  });
+  cacheAttemptSecret(data);
+  return data;
+}
+
+export async function getOrCreateDailyCode(testId) {
+  if (isDemoMode) return { code: "DEMO42", source: "auto" };
+  const { data, error } = await supabase.rpc("get_or_create_daily_code", { p_test_id: testId });
+  if (error) throw error;
+  return data;
+}
+
+export async function regenerateDailyCode(testId) {
+  if (isDemoMode) return { code: "DEMO99", source: "admin_regenerate" };
+  const { data, error } = await supabase.rpc("admin_regenerate_daily_code", { p_test_id: testId });
+  if (error) throw error;
+  return data;
+}
+
+export async function createMakeupCode(testId, studentDbId, bypassWaitingRoom = true) {
+  if (isDemoMode) return { code: "MAKEUP", source: "admin_makeup", for_student_id: studentDbId };
+  const { data, error } = await supabase.rpc("admin_create_makeup_code", {
+    p_test_id: testId, p_student_db_id: studentDbId, p_bypass_waiting_room: bypassWaitingRoom,
+  });
+  if (error) throw error;
+  return data;
+}
+
 function getAttemptSecret(attemptId) {
   try {
     const cache = JSON.parse(localStorage.getItem("hpa.attemptSecrets") || "{}");
