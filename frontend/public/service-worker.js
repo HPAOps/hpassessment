@@ -13,7 +13,7 @@
  * file paths (CRA hashes most filenames already, so this is mostly for
  * the index.html itself + manifest).
  */
-const CACHE_VERSION = "hpa-v1";
+const CACHE_VERSION = "hpa-v2";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 

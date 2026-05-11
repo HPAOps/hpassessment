@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { GraduationCap, Loader2, ShieldCheck, BookOpenCheck } from "lucide-react";
+import { GraduationCap, Loader2 } from "lucide-react";
 import { isDemoMode } from "@/lib/supabase";
 
 export default function StudentLogin() {
@@ -33,31 +33,14 @@ export default function StudentLogin() {
   return (
     <StudentShell hideLogout footer>
       <div className="flex-1 grid lg:grid-cols-2">
-        {/* Left brand panel */}
-        <div className="hidden lg:flex flex-col justify-between p-12 brand-gradient grain text-[hsl(var(--primary-foreground))] relative overflow-hidden">
-          <div className="relative z-10">
-            <div className="overline opacity-80 !text-white/70">Course Growth Assessments</div>
-            <h2 className="mt-6 font-display text-5xl font-bold tracking-tight leading-[1.05]">
-              Show what you've learned.<br/>
-              <span className="text-[hsl(var(--accent))]">Discover how far you've grown.</span>
-            </h2>
-            <p className="mt-6 max-w-md text-white/75 text-base">
-              Take your Beginning of Course or End of Course assessment. Highland Prep tracks your growth so your teachers can support you better.
-            </p>
-          </div>
-          <div className="relative z-10 grid grid-cols-2 gap-3 max-w-sm">
-            <div className="rounded-lg border border-white/15 p-4 bg-white/5 backdrop-blur">
-              <BookOpenCheck className="h-5 w-5 text-[hsl(var(--accent))]" />
-              <div className="mt-2 text-sm font-medium">Image-based questions</div>
-              <div className="text-xs text-white/60">Read carefully, take your time.</div>
-            </div>
-            <div className="rounded-lg border border-white/15 p-4 bg-white/5 backdrop-blur">
-              <ShieldCheck className="h-5 w-5 text-[hsl(var(--accent))]" />
-              <div className="mt-2 text-sm font-medium">Auto-saved</div>
-              <div className="text-xs text-white/60">Your answers save as you go.</div>
-            </div>
-          </div>
-          <div className="absolute -right-32 -bottom-32 w-[480px] h-[480px] rounded-full bg-[hsl(var(--accent))]/20 blur-3xl" />
+        {/* Left brand panel: black canvas with the HPA shield centered */}
+        <div className="hidden lg:flex items-center justify-center bg-black p-12 relative overflow-hidden" data-testid="login-brand-panel">
+          <img
+            src="/hpa-logo.png"
+            alt="HPA Educational Services"
+            className="relative z-10 w-[min(78%,560px)] h-auto object-contain drop-shadow-2xl select-none"
+            draggable={false}
+          />
         </div>
 
         {/* Right login panel */}
