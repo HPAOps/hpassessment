@@ -88,8 +88,29 @@ export async function parseTextBookletDocx(file) {
 
   function commitQuestion(attach) {
     if (!currentQ) return;
-    currentQ.stem = stemLines.join(" ").replace(/\s+/g, " ").trim();
-    currentQ.passage_ordinal = attach || null;
+    // Detect inline passage: if the question's pre-choices block has 2+
+    // paragraph-lines, the first line is the stem and the rest form a
+    // passage tied to JUST this question (e.g. Q1's "Keersten's family..."
+    // sentence, Q7's 7-paragraph excerpt). This is how the booklet visually
+    // separates the question from the text being analyzed.
+    if (stemLines.length > 1) {
+      const firstLine = stemLines[0];
+      const remaining = stemLines.slice(1);
+      const body = remaining.join("\n\n").trim();
+      if (body) {
+        passageCounter += 1;
+        passages.push({
+          ordinal: passageCounter,
+          title: null,
+          body,
+        });
+        currentQ.passage_ordinal = passageCounter;
+      }
+      currentQ.stem = firstLine.replace(/\s+/g, " ").trim();
+    } else {
+      currentQ.stem = stemLines.join(" ").replace(/\s+/g, " ").trim();
+      currentQ.passage_ordinal = attach || null;
+    }
     questions.push(currentQ);
     currentQ = null;
     stemLines = [];
