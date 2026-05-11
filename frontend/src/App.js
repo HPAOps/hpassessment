@@ -15,6 +15,8 @@ import StudentWaitingRoom from "@/pages/StudentWaitingRoom";
 import StudentTest from "@/pages/StudentTest";
 import StudentSubmitConfirm from "@/pages/StudentSubmitConfirm";
 import StaffLogin from "@/pages/StaffLogin";
+import StaffForgotPassword from "@/pages/StaffForgotPassword";
+import StaffResetPassword from "@/pages/StaffResetPassword";
 import StaffOAuthCallback from "@/pages/StaffOAuthCallback";
 
 import AdminDashboard from "@/pages/admin/Dashboard";
@@ -53,6 +55,8 @@ function App() {
 
             {/* Staff */}
             <Route path="/staff/login" element={<StaffLogin />} />
+            <Route path="/staff/forgot-password" element={<StaffForgotPassword />} />
+            <Route path="/staff/reset-password" element={<StaffResetPassword />} />
             <Route path="/staff/oauth-callback" element={<StaffOAuthCallback />} />
             <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
             <Route path="/admin/dashboard" element={<RequireStaff><AdminDashboard /></RequireStaff>} />

@@ -1138,6 +1138,39 @@ export async function deleteWhitelist(email) {
 }
 
 // ---------------------------------------------------------------------------
+// PASSWORD (non-SSO auth)
+// ---------------------------------------------------------------------------
+// Send a "reset your password" email to a staff user. Works for any email
+// that already exists in Supabase auth.users (i.e., they've signed in at
+// least once -- via SSO or password).
+//
+// The email contains a link to /staff/reset-password where the user can
+// set a new password. Required Supabase config:
+//   Authentication -> URL Configuration -> Redirect URLs must include
+//   <REACT_APP_BACKEND_URL>/staff/reset-password
+export async function sendPasswordResetEmail(email) {
+  if (isDemoMode) return { ok: true };
+  const redirectTo = `${window.location.origin}/staff/reset-password`;
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+  if (error) throw error;
+  return { ok: true };
+}
+
+// Update the currently-signed-in user's password. Used both from a
+// "Change my password" UI and from the password-reset landing page
+// (Supabase auto-creates a recovery session when the email link is clicked).
+export async function updateMyPassword(newPassword) {
+  if (isDemoMode) return { ok: true };
+  if (!newPassword || newPassword.length < 8) {
+    throw new Error("Password must be at least 8 characters.");
+  }
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+  return { ok: true };
+}
+
+
+// ---------------------------------------------------------------------------
 // SYNC RUNS (integration run history)
 // ---------------------------------------------------------------------------
 

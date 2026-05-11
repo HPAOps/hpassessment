@@ -11,11 +11,11 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { CheckCircle2, AlertCircle, Plug, ShieldCheck, Users, KeyRound, RotateCcw, Trash2, Plus, Lock, Clock, XCircle, Activity, RefreshCw, Loader2 } from "lucide-react";
+import { CheckCircle2, AlertCircle, Plug, ShieldCheck, Users, KeyRound, RotateCcw, Trash2, Plus, Lock, Clock, XCircle, Activity, RefreshCw, Loader2, Mail, Search } from "lucide-react";
 import {
   listSecrets, setSecret, clearSecret, INTEGRATION_CATALOG,
   listWhitelist, upsertWhitelist, deleteWhitelist,
-  listCampuses, listTeachers,
+  listCampuses, listTeachers, listStaff, sendPasswordResetEmail,
   listSyncRunsLatest, listSyncRunsRecent,
   invokeOneRosterApiSync,
 } from "@/lib/api";
@@ -364,22 +364,81 @@ function WhitelistManager({ isSuper }) {
   const [rows, setRows] = useState(null);
   const [campuses, setCampuses] = useState([]);
   const [teachers, setTeachers] = useState([]);
+  const [staffRows, setStaffRows] = useState([]);
+  const [search, setSearch] = useState("");
+  const [resettingEmail, setResettingEmail] = useState(null);
 
   async function refresh() {
     setRows(await listWhitelist());
     setCampuses(await listCampuses());
-    setTeachers(await listTeachers());
+    const [t, s] = await Promise.all([
+      listTeachers().catch(() => []),
+      listStaff().catch(() => []),
+    ]);
+    setTeachers(t);
+    setStaffRows(s);
   }
   useEffect(() => { refresh(); }, []);
 
   if (rows === null) return <div className="text-sm text-muted-foreground">Loading…</div>;
 
+  // Build email -> full name map from teachers + staff tables.
+  const nameByEmail = new Map();
+  for (const t of teachers) {
+    if (t.email) nameByEmail.set(t.email.toLowerCase(), `${t.first_name || ""} ${t.last_name || ""}`.trim());
+  }
+  for (const s of staffRows) {
+    const key = s.email?.toLowerCase();
+    if (key && !nameByEmail.has(key)) {
+      nameByEmail.set(key, `${s.first_name || ""} ${s.last_name || ""}`.trim());
+    }
+  }
+  // Also look up by linked teacher_id if email isn't matched.
+  const teacherById = new Map(teachers.map(t => [t.id, `${t.first_name || ""} ${t.last_name || ""}`.trim()]));
+
+  const filteredRows = search.trim()
+    ? rows.filter(r => {
+        const q = search.toLowerCase();
+        const name = nameByEmail.get(r.email.toLowerCase()) || teacherById.get(r.teacher_id) || "";
+        return (
+          r.email.toLowerCase().includes(q) ||
+          name.toLowerCase().includes(q) ||
+          (r.role || "").toLowerCase().includes(q) ||
+          (campuses.find(c => c.id === r.campus_id)?.name || "").toLowerCase().includes(q)
+        );
+      })
+    : rows;
+
+  async function onSendReset(email) {
+    setResettingEmail(email);
+    try {
+      await sendPasswordResetEmail(email);
+      toast.success(`Password reset email sent to ${email}`);
+    } catch (e) {
+      toast.error(e?.message || "Couldn't send reset email");
+    } finally {
+      setResettingEmail(null);
+    }
+  }
+
   return (
     <>
       <Card className="mb-4">
-        <CardContent className="p-4 flex items-center justify-between">
+        <CardContent className="p-4 flex items-center justify-between gap-3 flex-wrap">
           <div className="text-sm">
-            <strong>{rows.length}</strong> email{rows.length === 1 ? "" : "s"} authorized to sign in via Microsoft SSO.
+            <strong>{rows.length}</strong> email{rows.length === 1 ? "" : "s"} authorized to sign in via Microsoft SSO or password.
+          </div>
+          <div className="flex items-center gap-2 flex-1 min-w-[260px] max-w-md">
+            <div className="relative flex-1">
+              <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Search by name, email, role, campus…"
+                className="pl-9 h-9"
+                data-testid="wl-search"
+              />
+            </div>
           </div>
           <WhitelistDialog mode="add" campuses={campuses} teachers={teachers} onDone={refresh} disabled={!isSuper}>
             <Button size="sm" disabled={!isSuper} data-testid="add-whitelist"><Plus className="h-4 w-4" /> Add staff</Button>
@@ -391,6 +450,7 @@ function WhitelistManager({ isSuper }) {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
                 <TableHead>Campus</TableHead>
@@ -399,30 +459,49 @@ function WhitelistManager({ isSuper }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map(r => (
-                <TableRow key={r.id} data-testid={`wl-row-${r.email}`}>
-                  <TableCell className="font-mono text-xs">{r.email}</TableCell>
-                  <TableCell><Badge variant="outline">{r.role.replace("_", " ")}</Badge></TableCell>
-                  <TableCell className="text-xs">{campuses.find(c => c.id === r.campus_id)?.name || "—"}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{r.tenant_hint || "—"}</TableCell>
-                  <TableCell className="text-right">
-                    <WhitelistDialog mode="edit" entry={r} campuses={campuses} teachers={teachers} onDone={refresh} disabled={!isSuper}>
-                      <Button size="sm" variant="ghost" disabled={!isSuper}>Edit</Button>
-                    </WhitelistDialog>
-                    <Button size="sm" variant="ghost" disabled={!isSuper}
-                      onClick={async () => {
-                        if (!confirm(`Remove ${r.email}? They'll lose access on next sign-in.`)) return;
-                        await deleteWhitelist(r.email);
-                        toast.success(`${r.email} removed`);
-                        refresh();
-                      }}
-                      data-testid={`wl-del-${r.email}`}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {rows.length === 0 && <TableRow><TableCell colSpan={5} className="text-center text-sm text-muted-foreground py-10">Whitelist is empty.</TableCell></TableRow>}
+              {filteredRows.map(r => {
+                const name = nameByEmail.get(r.email.toLowerCase()) || teacherById.get(r.teacher_id) || "";
+                return (
+                  <TableRow key={r.id} data-testid={`wl-row-${r.email}`}>
+                    <TableCell className="text-sm" data-testid={`wl-name-${r.email}`}>
+                      {name || <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{r.email}</TableCell>
+                    <TableCell><Badge variant="outline">{r.role.replace("_", " ")}</Badge></TableCell>
+                    <TableCell className="text-xs">{campuses.find(c => c.id === r.campus_id)?.name || "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{r.tenant_hint || "—"}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!isSuper || resettingEmail === r.email}
+                        onClick={() => onSendReset(r.email)}
+                        title="Send password reset email"
+                        data-testid={`wl-reset-${r.email}`}
+                      >
+                        {resettingEmail === r.email
+                          ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          : <Mail className="h-3.5 w-3.5" />}
+                        <span className="hidden xl:inline ml-1">Reset</span>
+                      </Button>
+                      <WhitelistDialog mode="edit" entry={r} campuses={campuses} teachers={teachers} onDone={refresh} disabled={!isSuper}>
+                        <Button size="sm" variant="ghost" disabled={!isSuper}>Edit</Button>
+                      </WhitelistDialog>
+                      <Button size="sm" variant="ghost" disabled={!isSuper}
+                        onClick={async () => {
+                          if (!confirm(`Remove ${r.email}? They'll lose access on next sign-in.`)) return;
+                          await deleteWhitelist(r.email);
+                          toast.success(`${r.email} removed`);
+                          refresh();
+                        }}
+                        data-testid={`wl-del-${r.email}`}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {filteredRows.length === 0 && <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-10">{search ? `No matches for "${search}".` : "Whitelist is empty."}</TableCell></TableRow>}
             </TableBody>
           </Table>
         </CardContent>

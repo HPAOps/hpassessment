@@ -104,6 +104,14 @@ export default function StaffLogin() {
               <Button type="submit" disabled={loading} className="w-full h-11" data-testid="staff-login-submit">
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Sign in
               </Button>
+
+              <Link
+                to="/staff/forgot-password"
+                className="block text-center text-xs text-muted-foreground hover:text-foreground"
+                data-testid="forgot-password-link"
+              >
+                Forgot your password?
+              </Link>
             </form>
 
             {isDemoMode && (
