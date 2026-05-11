@@ -1,0 +1,62 @@
+{
+  "summary": "Iteration-15 frontend-only validation of the three new features: (1) Text-based test IMPORT wizard, (2) Whitelist Name column + Edit dialog name fields + password-reset trigger, (3) Forgot/reset password pages. Import flow PASSES end-to-end. Whitelist PASSES end-to-end. Forgot-password page mostly works but Supabase /auth/v1/recover returns 400 (redirect-URL config — user-known) so the 'Email sent' success state never renders; the page has no graceful fallback for that case. Reset-password page has a real bug: when ANY non-recovery staff session is active, it shows the 'Set a new password' form instead of 'Link expired or invalid'. When fully signed out it correctly shows the invalid-link state. Student take-test flow (steps 4-5) NOT exercised this iteration (would need a fresh proctor session + an enrolled student in the picked course; time-boxed).",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "StaffResetPassword.jsx",
+        "issue": "Recovery-session gate too loose. Lines 31-41 set hasRecoverySession=true whenever ANY session is present, not only when a PASSWORD_RECOVERY event fires. Result: any already-signed-in staff who navigates directly to /staff/reset-password sees a live 'Set a new password' form (and would actually overwrite their own password) instead of the 'Link expired or invalid' state. With a fully cleared session the page works correctly.",
+        "selector": "[data-testid=reset-password-card]",
+        "priority": "HIGH"
+      },
+      {
+        "component": "StaffForgotPassword.jsx",
+        "issue": "When supabase.auth.resetPasswordForEmail returns 400 (e.g. 'Redirect URL not allowed' — current Supabase project config), the page stays on the form. There is no 'Email sent' confirmation panel and the [data-testid=forgot-back-to-login] testid is absent in the error path. Standard auth UX is to always render the success state regardless of backend outcome to prevent email enumeration; current code does the opposite.",
+        "selector": "[data-testid=forgot-password-card]",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Forgot password → Supabase recover",
+        "issue": "POST https://soaagmzmecutvlxfbscl.supabase.co/auth/v1/recover?redirect_to=...%2Fstaff%2Freset-password returns 400. User-acknowledged Supabase 'Allowed Redirect URLs' allow-list does not yet include /staff/reset-password. This is configuration, NOT a code bug per user instruction.",
+        "affected_selectors": ["[data-testid=forgot-submit]"]
+      }
+    ],
+    "design_issues": []
+  },
+  "step_by_step_results": {
+    "step1_step2_step3_text_import": "PASS. /admin/test-import → ti-format-text → name 'TEST_English 3 Growth Test' → first course (Adv Band/FNA111) → EOC today→+30d → ti-next-1 → upload /tmp/eng3.docx → ti-text-parsed-badge='30 Qs, 17 passages' → upload /tmp/eng3key.docx → ti-next-2 → ti-text-preview rendered 30 rows → ti-commit → toast 'Test imported! Review and publish from Tests.' → wizard reset to step 1.",
+    "step3_shared_passage_pairs": "5 of 6 expected pairs SHARED correctly: Q15+Q16 (passage #7), Q17+Q18 (passage #8), Q19+Q20 (passage #9), Q22+Q23 (passage #11), Q25+Q26 (passage #13). DISCREPANCY: Q11 (passage #3) and Q12 (passage #4) do NOT share a passage in the parser output, contrary to the spec in the test request. Either docxText.js mis-segments at the Q11→Q12 boundary in this booklet, or the request's expectation list is wrong for that pair. Worth a human spot-check against the source .docx.",
+    "step4_step5_student_text_test_take": "SKIPPED — not exercised this iteration. Requires (a) creating a daily code via /admin/sections/<sec>/proctor/<testId>/<phase>, (b) finding a real student enrolled in the course we attached the test to (the only course picked was Adv Band/FNA111 which may not match any of the real-OneRoster student enrollments captured in test_credentials.md), (c) student code-aggregated submit + proctor start + auto-redirect. Recommend main agent self-test or schedule a dedicated retest iteration with a known student↔course pairing.",
+    "step6_whitelist_name_column_and_edit": "PASS. /admin/integrations → tab-whitelist. Headers = ['Name','Email','Role','Campus','Tenant','Actions'] — Name first ✓. wl-search='Frank' filtered to 3 rows (Aaron Frank, Kathleen Frank, Sabrina Frank). Edit on Aaron Frank → wl-first-name='Aaron', wl-last-name='Frank' pre-filled ✓. Changed first name → 'Aaron J' → wl-save → toast 'Updated' → Name cell re-renders to 'Aaron J Frank' ✓.",
+    "step7_password_reset_from_whitelist": "PASS. Clicked wl-reset-aafrank@highlandprepaz.org → toast 'Password reset email sent to aafrank@highlandprepaz.org'. No JS exception. Note: the underlying Supabase 400 (see step 8) may apply here too — the call is fire-and-forget so a swallowed error still toasts success. Cannot fully verify the email round-trip from the UI, but the user-facing behaviour matches the spec.",
+    "step8_forgot_password_page": "PARTIAL. forgot-password-link present on /staff/login ✓ → navigates to /staff/forgot-password ✓ → forgot-password-card visible ✓ → forgot-email-input fills ✓ → forgot-submit click triggers POST /auth/v1/recover → 400 from Supabase ✗ → success state ('Email sent' panel) NOT rendered ✗ → forgot-back-to-login testid NOT present in DOM ✗. Per user note, 400 itself is expected (Supabase redirect-URL allow-list not yet configured), but the page should still surface the success panel + back-to-login for the spec to be satisfied.",
+    "step9_reset_password_no_recovery_session": "MIXED. (a) When fully signed out (localStorage cleared + supabase keys removed): 'Link expired or invalid' renders and [data-testid=reset-request-new] is visible ✓. (b) When a normal staff session is active (the realistic case after testing other admin flows): the page wrongly renders the 'Set a new password' form, allowing the live session to be overwritten — see ui_bugs[0].",
+    "step10_regression_console_errors": "Only the expected Supabase 400 from /auth/v1/recover. No other JS exceptions, no 5xx, no React render warnings during any flow."
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Fix StaffResetPassword.jsx recovery-gate: track a boolean that flips true ONLY on the PASSWORD_RECOVERY event from onAuthStateChange; do NOT treat a generic existing session as a recovery session. The initial getSession() probe should also check for the recovery flag (or simply not auto-trust the session).",
+    "Make StaffForgotPassword.jsx render the 'Email sent' success panel regardless of Supabase response (recommended UX + email-enumeration safety). At minimum, render [data-testid=forgot-back-to-login] even on the error/empty path.",
+    "Verify the Q11/Q12 passage-pairing in /app/frontend/src/lib/docxText.js against the English-3 booklet — the parser put them on consecutive but distinct passages (#3 and #4); test spec expected them shared. Could be a paragraph-break heuristic missing a continuation of the same passage.",
+    "Add Supabase 'Allowed Redirect URLs' entry for https://boc-eoc-testing.preview.emergentagent.com/staff/reset-password (project-config item, not code).",
+    "Future retest: exercise steps 4–5 (student text-mode take). Pick a course that has a known enrolled student from test_credentials.md (e.g. one of the live 300xxx IDs in Pre-AP Biology 1) when re-running the import, so the same fixture seeds the proctor + student leg."
+  ],
+  "critical_code_review_comments": [
+    "StaffResetPassword.jsx: the supabase-js v2 onAuthStateChange fires 'PASSWORD_RECOVERY' specifically when the recovery hash is parsed. Use that flag exclusively. Today's `event === 'PASSWORD_RECOVERY' || (session && session.user)` and the `setHasRecoverySession(!!data?.session?.user)` fallback both leak normal logins into the recovery code path — a security-adjacent bug.",
+    "StaffForgotPassword.jsx error handling: surfacing the raw Supabase 400 to the form (instead of a generic success) is also a mild email-enumeration vector.",
+    "TestImport.jsx commit() catch block stringifies arbitrary errors via JSON.stringify(e) — if e is a Supabase error object with circular refs this could throw inside the catch. Prefer e?.message ?? String(e).",
+    "TestImport.jsx parseAnswerKey: the regex /(\\d{1,3})\\s*[\\)\\.\\-:]?\\s+([ABCD])(?![A-Z])/gi de-dupes by qn keeping FIRST occurrence — for a two-column key with Q31→A in column 2 of the page, this is correct; just worth a unit-test fixture."
+  ],
+  "updated_files": [],
+  "success_rate": {
+    "frontend": "Steps 1-3 PASS, 6 PASS, 7 PASS, 8 partial (UX gap on supabase 400), 9 mixed (works clean-session, bug on active-session). 4-5 not exercised this iteration. Overall ~7/10 fully green, 1 hard bug, 1 UX gap, 1 spec-vs-parser discrepancy."
+  },
+  "test_credentials": "super@hpa.test / HPATestUser123 (used). Student-id login NOT exercised this run.",
+  "seed_data_creation": "Created one test record via the import wizard: name='TEST_English 3 Growth Test', course='Adv Band' (FNA111), scope=district, EOC window today→today+30d, 30 questions + 17 passages. Also mutated whitelist row aafrank@highlandprepaz.org first_name from 'Aaron' → 'Aaron J' (toggles back to 'Aaron' on re-run since the script flips based on current value).",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Re-run after the two recommended fixes (StaffResetPassword recovery-gate + StaffForgotPassword always-success path) + the Supabase redirect-URL allow-list update. For steps 4-5, pick an existing course with a known student enrollment from test_credentials.md (e.g., Pre-AP Biology 1 with student 300699 or 300432) so the daily-code dance is straightforward.",
+  "rca_of_the_issue": "RCA — StaffResetPassword bug: supabase-js sets the session BEFORE dispatching the PASSWORD_RECOVERY event on hash parse, so `getSession()` will return a session that's actually a recovery session — but it ALSO returns the same shape for any normal login. The component cannot tell the two apart from getSession() alone. Correct pattern: maintain a `sawRecoveryEvent` flag that ONLY gets set true inside the onAuthStateChange listener when `event === 'PASSWORD_RECOVERY'`, then derive `hasRecoverySession = sawRecoveryEvent`. The getSession probe should be used only to short-circuit `null` (no session at all) → 'Link expired or invalid'. RCA — Forgot password 400: Supabase project 'Allowed Redirect URLs' allow-list is not yet whitelisting the preview origin's /staff/reset-password path; supabase rejects the recover call with 400 before sending any email. The fix is purely a dashboard configuration change."
+}
