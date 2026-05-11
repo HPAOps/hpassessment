@@ -35,8 +35,8 @@ export default function StudentWaitingRoom() {
         }
       } catch (e) {
         if (!alive) return;
-        const msg = e?.message || JSON.stringify(e);
-        setError(msg.replace(/\s*\(HTTP \d+\)\s*$/, ""));
+        const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
+        setError(String(msg).replace(/\s*\(HTTP \d+\)\s*$/, ""));
       }
     }
     tick();
