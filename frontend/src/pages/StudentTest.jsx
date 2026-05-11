@@ -164,20 +164,11 @@ export default function StudentTest() {
             )}
           </div>
 
-          {/* TEXT MODE: stem → passage → choices (matches paper booklet layout) */}
+          {/* TEXT MODE: passage → stem → choices (passage first so students
+              read the source material before the question, matching the
+              standard reading-comprehension layout). */}
           {currentQ && test.format === "text" && (
             <div className="space-y-6">
-              <div
-                className="rounded-xl border border-border bg-card px-6 py-5"
-                data-testid="question-stem"
-              >
-                <FormattedText
-                  text={currentQ.question_text}
-                  as="div"
-                  className="text-base leading-relaxed whitespace-pre-wrap"
-                />
-              </div>
-
               {(() => {
                 const p = currentQ.passage_id
                   ? passages.find(x => x.id === currentQ.passage_id)
@@ -206,6 +197,17 @@ export default function StudentTest() {
                   </div>
                 ) : null;
               })()}
+
+              <div
+                className="rounded-xl border border-border bg-card px-6 py-5"
+                data-testid="question-stem"
+              >
+                <FormattedText
+                  text={currentQ.question_text}
+                  as="div"
+                  className="text-base leading-relaxed whitespace-pre-wrap"
+                />
+              </div>
             </div>
           )}
 

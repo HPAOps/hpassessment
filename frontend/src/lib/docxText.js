@@ -209,7 +209,13 @@ export async function parseTextBookletDocx(file) {
     }
 
     // Between questions (or after this question's D) → passage builder.
-    if (!pendingTitle && pendingBody.length === 0) {
+    // Only treat the first line as a "title" if it matches a directive like
+    // "Read the paragraphs." or "Read this excerpt from..." — those are
+    // pedagogical headers, not passage content. Everything else flows into
+    // the body so multi-paragraph passages (Q9's 3-paragraph Chuckwagons
+    // article, etc.) stay together as one continuous block.
+    const isDirective = /^Read\s+(this|the)\b/i.test(line);
+    if (!pendingTitle && pendingBody.length === 0 && isDirective) {
       pendingTitle = line;
     } else {
       pendingBody.push(line);

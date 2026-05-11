@@ -54,12 +54,9 @@ export default function TestPreview() {
               <Badge variant="outline" className="font-mono" data-testid="preview-correct">Correct: {q.correct_answer}</Badge>
             </div>
 
-            {/* TEXT MODE: stem → passage → choices (matches booklet layout) */}
+            {/* TEXT MODE: passage → stem → choices */}
             {isText && (
               <div className="mt-4 space-y-4">
-                <div className="rounded-xl border border-border bg-card px-5 py-4" data-testid="preview-stem">
-                  <FormattedText text={q.question_text} as="div" className="text-sm leading-relaxed whitespace-pre-wrap" />
-                </div>
                 {passage && (
                   <div className="rounded-xl border border-border bg-card overflow-hidden" data-testid="preview-passage">
                     {passage.title && (
@@ -72,6 +69,9 @@ export default function TestPreview() {
                     </div>
                   </div>
                 )}
+                <div className="rounded-xl border border-border bg-card px-5 py-4" data-testid="preview-stem">
+                  <FormattedText text={q.question_text} as="div" className="text-sm leading-relaxed whitespace-pre-wrap" />
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {["A","B","C","D"].map(L => {
                     const choiceText = q[`choice_${L.toLowerCase()}`];
