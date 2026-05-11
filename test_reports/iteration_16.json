@@ -1,0 +1,55 @@
+{
+  "summary": "Frontend-only verification of passage-aware question shuffle for English 3 text-based test. ALL 5 SHARED-PASSAGE PAIRS ARE ADJACENT in the student's shuffled order — the SQL patch /app/supabase/passage_aware_shuffle.sql is working as intended.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_setup": {
+    "test_id": "9f42d4c8-9b67-4ee9-85ec-a49b05b2b292",
+    "test_name": "TEST_English 3 Growth Test (text format, 30 Qs, 23 passages — note: iteration-15 import showed only 17 passages; current import is the new-parser version)",
+    "course": "Adv Band (FNA111)",
+    "section_id": "21ac3627-6497-4fed-8c96-d50b6bafce13 (Holland, Larissa @ Highland Prep, 25 students)",
+    "phase": "EOC (window 2026-05-11 → 2026-06-10, today is 2026-05-11)",
+    "student": "Jaime Abrica / 301046 (first student in roster)",
+    "proctor_code": "2HP8YZ",
+    "attempt_id": "cfd859e4-f241-4e10-9a49-7c89dc4e89c6",
+    "pre_test_action": "Toggled the test from Draft → Published via [data-testid=publish-9f42d4c8-...] before opening Proctor view."
+  },
+  "step_by_step_results": {
+    "step1_find_test": "PASS. /admin/tests → 'TEST_English 3 Growth Test' row, test_id captured.",
+    "step2_proctor_code": "PASS. /admin/sections/<sec>/proctor/<test>/EOC → [data-testid=proctor-code] = '2HP8YZ'.",
+    "step3_student_enter_code": "PASS. Student 301046 → courses → Adv Band tile → teacher-verify-yes → test-pick-<id>-EOC → /student/test-code/.../EOC → fill code-aggregated='2HP8YZ' → code-submit → /student/waiting/<attemptId>.",
+    "step4_proctor_start": "PASS. proctor-start → proctor-start-confirm. Student waiting room auto-redirected to /student/test/<attemptId> within ~3s.",
+    "step5_walk_through_30": "PASS. Used [data-testid=nav-q-{1..30}] to jump and read [data-testid=question-stem] + presence of [data-testid=text-passage]. Captured order: [21, 11, 13, 10, 1, 8, 2, 22, 23, 29, 27, 25, 26, 12, 15, 16, 4, 14, 3, 7, 24, 5, 28, 6, 9, 17, 18, 30, 19, 20].",
+    "step6_adjacency_assertion": "PASS — ALL 5 SHARED-PASSAGE PAIRS ARE ADJACENT. (15,16)@positions 15,16. (17,18)@positions 26,27. (19,20)@positions 29,30. (22,23)@positions 8,9. (25,26)@positions 12,13.",
+    "step7_shuffle_assertion": "PASS. 28 of 30 questions are out of natural 1..30 order — shuffle is clearly active.",
+    "step8_passage_visibility": "INFORMATIONAL — does NOT match the spec's expectation in the test request, but is consistent with the source content. Questions WITHOUT a [data-testid=text-passage] card: Q1, Q2, Q3, Q4, Q5, Q6, Q7, Q8. Questions WITH a passage card: Q9–Q30. The test request asserted only Q2 and Q3 should be without passages, but Q1 and Q4–Q8 are grammar/sentence-revision items (hyphenation, sentence correctness, sentence rewriting, linking words) that legitimately have no passage. The English-3 booklet appears to have its first passage attached starting at Q9. Recommend the user reconfirm the spec — the renderer is showing exactly what the data carries (questions without text_passage_id render no card). This is NOT a shuffle bug."
+  },
+  "discrepancies": [
+    "Test-request spec said Q4–Q14 should all show a passage card; UI shows Q4–Q8 do NOT. Most likely the spec is wrong about Q1/Q4–Q8 — they are grammar-only items in the booklet. Worth a one-line sanity check against the source .docx — but irrelevant to the shuffle goal."
+  ],
+  "regression_checks": {
+    "submit_rpc": "NOT exercised — the test was left in-progress (we used the navigator to jump around, not answer + submit, to avoid corrupting data). Recommend a follow-up quick check that the submit RPC still works end-to-end on a text test.",
+    "image_test_regression": "NOT exercised this iteration."
+  },
+  "test_report_links": [],
+  "action_items": [
+    "(Optional) Re-confirm the expected passage-presence list for English 3 with the source .docx — current behaviour is Q9–Q30 have passages, Q1–Q8 do not. If the booklet truly has passages starting earlier, re-run the import; otherwise the spec in the test request was overstated.",
+    "(Optional) Add a brief follow-up test that completes a text-test submit + verifies the score breakdown.",
+    "Nothing required for the shuffle feature itself — it is working as designed."
+  ],
+  "critical_code_review_comments": [
+    "Per StudentTest.jsx the next/previous buttons use data-testid='next-question' / 'prev-question', NOT 'test-next-btn' / 'test-prev-btn' as the test request stated. Either update the renderer or update internal docs to match — slight risk of future tests breaking.",
+    "Several earlier iterations referenced the test-next-btn naming; consider standardising."
+  ],
+  "updated_files": [],
+  "success_rate": { "frontend": "100% on the shuffle adjacency goal (5/5 pairs adjacent)." },
+  "test_credentials": "super@hpa.test / HPATestUser123; student 301046 (Jaime Abrica, Adv Band Holland section).",
+  "seed_data_creation": "Published the existing TEST_English 3 Growth Test (was Draft). Created one student attempt (id cfd859e4-f241-4e10-9a49-7c89dc4e89c6) for student 301046 — left in-progress with all 30 questions visited via navigator but no answers selected. Will be auto-reset by the SQL patch's in-progress wipe if user re-runs the migration; otherwise safe to delete via /admin or a small SQL cleanup.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Shuffle works. Optional follow-ups: (1) a 2nd or 3rd run to make sure adjacency holds across different random seeds — do it by deleting / restarting the in-progress attempt; the SQL helper _shuffle_questions_for_test fires on every fresh redeem_test_code. (2) Submit-flow regression on a text test. (3) Image-test regression (any published image-format test). Selector reminder: next button = [data-testid=next-question], jump navigator = [data-testid=nav-q-{1..30}].",
+  "rca_of_the_issue": "No bug. Patch passage_aware_shuffle.sql is correctly clustering shared-passage questions: it apparently keeps clusters intact and shuffles cluster order + within-cluster order while preserving adjacency. Empirical: the 5 known shared-passage pairs landed at positions (8,9), (12,13), (15,16), (26,27), (29,30) — all consecutive — while 28/30 questions are off their natural slot."
+}
