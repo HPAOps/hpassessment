@@ -17,6 +17,7 @@ export default function StudentTest() {
   const [attempt, setAttempt] = useState(null);
   const [test, setTest] = useState(null);
   const [orderedQuestions, setOrderedQuestions] = useState([]);
+  const [passages, setPassages] = useState([]); // text-mode only
   const [responses, setResponses] = useState([]);
   const [idx, setIdx] = useState(0);
   const [zoom, setZoom] = useState(1);
@@ -42,6 +43,7 @@ export default function StudentTest() {
         setAttempt(data.attempt);
         setTest(data.test);
         setOrderedQuestions(data.questions || []);
+        setPassages(data.passages || []);
         setResponses(data.responses || []);
       } catch (e) {
         if (!alive) return;
@@ -149,16 +151,57 @@ export default function StudentTest() {
         <div className="px-6 py-8 lg:px-12 lg:py-12 max-w-5xl">
           <div className="flex items-center justify-between mb-4">
             <div className="overline">Question {idx + 1}</div>
-            <div className="flex items-center gap-1">
-              <Button variant="outline" size="sm" onClick={() => setZoom(z => Math.max(0.6, z - 0.1))} aria-label="Zoom out" data-testid="zoom-out">
-                <ZoomOut className="h-4 w-4" />
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => setZoom(z => Math.min(2, z + 0.1))} aria-label="Zoom in" data-testid="zoom-in">
-                <ZoomIn className="h-4 w-4" />
-              </Button>
-            </div>
+            {test.format !== "text" && (
+              <div className="flex items-center gap-1">
+                <Button variant="outline" size="sm" onClick={() => setZoom(z => Math.max(0.6, z - 0.1))} aria-label="Zoom out" data-testid="zoom-out">
+                  <ZoomOut className="h-4 w-4" />
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setZoom(z => Math.min(2, z + 0.1))} aria-label="Zoom in" data-testid="zoom-in">
+                  <ZoomIn className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
           </div>
-          {currentQ && (
+
+          {/* TEXT MODE: passage (if any) → stem → choices */}
+          {currentQ && test.format === "text" && (
+            <div className="space-y-6">
+              {(() => {
+                const p = currentQ.passage_id
+                  ? passages.find(x => x.id === currentQ.passage_id)
+                  : null;
+                return p ? (
+                  <div
+                    className="rounded-xl border border-border bg-card overflow-hidden"
+                    data-testid="text-passage"
+                  >
+                    {p.title && (
+                      <div className="px-6 py-3 bg-secondary/30 border-b border-border">
+                        <div className="font-display font-bold text-base whitespace-pre-wrap">{p.title}</div>
+                      </div>
+                    )}
+                    <div className="px-6 py-5 max-h-[45vh] overflow-auto">
+                      <div className="prose prose-sm max-w-none whitespace-pre-wrap leading-relaxed text-[15px]">
+                        {p.body}
+                      </div>
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+
+              <div
+                className="rounded-xl border border-border bg-card px-6 py-5"
+                data-testid="question-stem"
+              >
+                <div className="text-base leading-relaxed whitespace-pre-wrap">
+                  {currentQ.question_text}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* IMAGE MODE: existing image renderer */}
+          {currentQ && test.format !== "text" && (
             <div className="rounded-xl border border-border bg-card overflow-hidden">
               <div className="overflow-auto max-h-[60vh] flex items-center justify-center bg-secondary/30 p-4">
                 <img
@@ -176,13 +219,16 @@ export default function StudentTest() {
           <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-3">
             {["A","B","C","D"].map(letter => {
               const selected = currentResponse?.selected_answer === letter;
+              const choiceText = test.format === "text"
+                ? currentQ?.[`choice_${letter.toLowerCase()}`]
+                : null;
               return (
                 <button
                   key={letter}
                   data-testid={`answer-${letter}`}
                   onClick={() => pick(letter)}
                   className={cn(
-                    "student-answer-btn rounded-lg border-2 p-5 text-left transition-all flex items-center gap-4",
+                    "student-answer-btn rounded-lg border-2 p-5 text-left transition-all flex items-start gap-4",
                     selected
                       ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5 shadow-md"
                       : "border-border bg-card hover:border-[hsl(var(--accent))]/50 hover:bg-secondary/30"
@@ -192,8 +238,14 @@ export default function StudentTest() {
                     "h-12 w-12 rounded-md flex items-center justify-center font-display text-2xl font-bold shrink-0",
                     selected ? "bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]" : "bg-secondary text-foreground"
                   )}>{letter}</div>
-                  <div className="flex-1 text-base">Answer choice {letter}</div>
-                  {selected ? <CheckCircle2 className="h-5 w-5 text-[hsl(var(--primary))]" /> : null}
+                  <div className="flex-1 text-base">
+                    {choiceText ? (
+                      <span className="leading-relaxed">{choiceText}</span>
+                    ) : (
+                      <span>Answer choice {letter}</span>
+                    )}
+                  </div>
+                  {selected ? <CheckCircle2 className="h-5 w-5 text-[hsl(var(--primary))] shrink-0 mt-1" /> : null}
                 </button>
               );
             })}

@@ -9,12 +9,13 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import JSZip from "jszip";
 import Papa from "papaparse";
-import { listCourses, listTests, createTest, recordTestImport, listTestImports, upsertQuestion, uploadQuestionImage, listSchoolYears } from "@/lib/api";
+import { listCourses, listTests, createTest, recordTestImport, listTestImports, upsertQuestion, uploadQuestionImage, listSchoolYears, importTextTest } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
-import { ChevronRight, Upload, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { ChevronRight, Upload, AlertTriangle, CheckCircle2, Image as ImageIcon, FileText } from "lucide-react";
 import { CourseMultiSelect } from "@/components/common/CourseMultiSelect";
 import { extractDocxImages, extractDocxText } from "@/lib/docxImages";
+import { parseTextBookletDocx, validateParsedBooklet } from "@/lib/docxText";
 
 export default function TestImport() {
   const { staff } = useAuth();
@@ -28,11 +29,16 @@ export default function TestImport() {
     boc_opens_at: "", boc_closes_at: "",
     eoc_opens_at: "", eoc_closes_at: "",
     scope: "district",
+    format: "image", // "image" | "text"
   });
   const [bookletFile, setBookletFile] = useState(null);
   const [keyFile, setKeyFile] = useState(null);
   const [keyEntries, setKeyEntries] = useState([]); // {qn, ans}
   const [imageMap, setImageMap] = useState({}); // qn -> dataURL
+  // Text-mode parsed booklet:
+  //   { passages: [{ordinal, title?, body}], questions: [{qn, stem, choices:{A,B,C,D}, passage_ordinal?}] }
+  const [textParsed, setTextParsed] = useState(null);
+  const [textWarnings, setTextWarnings] = useState([]);
 
   useEffect(() => {
     listCourses().then(setCourses);
@@ -110,13 +116,32 @@ export default function TestImport() {
     toast.success(`${Object.keys(next).length} images mapped`);
   }
 
-  // Booklet upload: if it's a .docx, extract embedded images in document order
-  // and auto-populate the imageMap so users don't have to upload separately.
+  // Booklet upload: behavior depends on test format.
+  //   - IMAGE mode: extract embedded images from the .docx
+  //   - TEXT mode:  parse paragraphs into passages + questions + choices
   async function onBookletFile(e) {
     const f = e.target.files?.[0];
     if (!f) return;
     setBookletFile(f);
     if (!f.name.toLowerCase().endsWith(".docx")) return;
+
+    if (meta.format === "text") {
+      const loading = toast.loading("Parsing booklet text…");
+      try {
+        const parsed = await parseTextBookletDocx(f);
+        const warnings = validateParsedBooklet(parsed);
+        setTextParsed(parsed);
+        setTextWarnings(warnings);
+        toast.dismiss(loading);
+        toast.success(`Parsed ${parsed.questions.length} questions and ${parsed.passages.length} passages`);
+      } catch (err) {
+        toast.dismiss(loading);
+        toast.error("Couldn't parse the booklet: " + (err.message || err));
+      }
+      return;
+    }
+
+    // IMAGE mode: existing image-extraction path.
     const loading = toast.loading("Extracting question images from booklet…");
     try {
       const items = await extractDocxImages(f);
@@ -149,6 +174,10 @@ export default function TestImport() {
         (!s.end_date   || s.end_date   >= today)
       ) || schoolYears[0];
 
+      const qCountForCreate = meta.format === "text"
+        ? (textParsed?.questions?.length || 0)
+        : keyEntries.length;
+
       const test = await createTest({
         name: meta.name,
         course_ids: meta.course_ids,
@@ -158,30 +187,62 @@ export default function TestImport() {
         boc_closes_at: meta.boc_closes_at || null,
         eoc_opens_at: meta.eoc_opens_at || null,
         eoc_closes_at: meta.eoc_closes_at || null,
-        question_count: keyEntries.length,
+        question_count: qCountForCreate,
         is_published: false,
       }, staff?.email);
-      for (const { qn, ans } of keyEntries) {
-        const id = `${test.id}-q${qn}`;
-        await upsertQuestion({
-          id, test_id: test.id, question_number: qn,
-          correct_answer: ans, image_url: imageMap[qn] || null,
-          is_active: true,
-        }, staff?.email);
+
+      if (meta.format === "text") {
+        // Build the payload for admin_import_text_test: merge parsed questions
+        // with the answer key (matched by question number).
+        const keyByQn = Object.fromEntries(keyEntries.map(e => [e.qn, e.ans]));
+        const passages = (textParsed?.passages || []).map(p => ({
+          ordinal: p.ordinal,
+          title: p.title,
+          body: p.body,
+        }));
+        const questions = (textParsed?.questions || []).map(q => ({
+          qn: q.qn,
+          question_text: q.stem,
+          choice_a: q.choices.A,
+          choice_b: q.choices.B,
+          choice_c: q.choices.C,
+          choice_d: q.choices.D,
+          correct: keyByQn[q.qn] || null,
+          passage_ordinal: q.passage_ordinal || null,
+        }));
+        const missingAnswers = questions.filter(q => !q.correct).map(q => q.qn);
+        if (missingAnswers.length) {
+          throw new Error(
+            `Missing answer key for question${missingAnswers.length === 1 ? "" : "s"}: ${missingAnswers.slice(0, 8).join(", ")}${missingAnswers.length > 8 ? "…" : ""}`
+          );
+        }
+        await importTextTest(test.id, passages, questions);
+      } else {
+        for (const { qn, ans } of keyEntries) {
+          const id = `${test.id}-q${qn}`;
+          await upsertQuestion({
+            id, test_id: test.id, question_number: qn,
+            correct_answer: ans, image_url: imageMap[qn] || null,
+            is_active: true,
+          }, staff?.email);
+        }
       }
+
       await recordTestImport({
         course_id: meta.course_ids?.[0] || null,
         test_id: test.id,
         booklet_filename: bookletFile?.name,
         answer_key_filename: keyFile?.name,
-        detected_questions: keyEntries.length,
-        uploaded_images: Object.keys(imageMap).length,
+        detected_questions: qCountForCreate,
+        uploaded_images: meta.format === "text" ? 0 : Object.keys(imageMap).length,
         status: "completed",
       }, staff?.email);
+
       toast.success("Test imported! Review and publish from Tests.");
       setStep(1);
-      setMeta({ name:"", course_ids:[], boc_opens_at:"", boc_closes_at:"", eoc_opens_at:"", eoc_closes_at:"", scope:"district" });
+      setMeta({ name:"", course_ids:[], boc_opens_at:"", boc_closes_at:"", eoc_opens_at:"", eoc_closes_at:"", scope:"district", format:"image" });
       setBookletFile(null); setKeyFile(null); setKeyEntries([]); setImageMap({});
+      setTextParsed(null); setTextWarnings([]);
       setHistory(await listTestImports());
     } catch (e) {
       const msg = e?.message || e?.details || e?.hint || JSON.stringify(e);
@@ -204,6 +265,35 @@ export default function TestImport() {
       {step === 1 && (
         <Card>
           <CardContent className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="md:col-span-2 space-y-2">
+              <Label>Test format</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" data-testid="ti-format">
+                <button
+                  type="button"
+                  onClick={() => setMeta({ ...meta, format: "image" })}
+                  data-testid="ti-format-image"
+                  className={`text-left rounded-lg border-2 p-4 transition-all flex items-start gap-3 ${meta.format === "image" ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5" : "border-border hover:border-[hsl(var(--accent))]/50"}`}
+                >
+                  <ImageIcon className="h-5 w-5 mt-1 shrink-0" />
+                  <div>
+                    <div className="font-medium">Image-based</div>
+                    <div className="text-xs text-muted-foreground mt-1">Math, science, anything with figures. Question images extracted from the .docx booklet.</div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMeta({ ...meta, format: "text" })}
+                  data-testid="ti-format-text"
+                  className={`text-left rounded-lg border-2 p-4 transition-all flex items-start gap-3 ${meta.format === "text" ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/5" : "border-border hover:border-[hsl(var(--accent))]/50"}`}
+                >
+                  <FileText className="h-5 w-5 mt-1 shrink-0" />
+                  <div>
+                    <div className="font-medium">Text-based</div>
+                    <div className="text-xs text-muted-foreground mt-1">English / reading. Passages, stems, and A/B/C/D choices parsed straight out of the booklet — no images needed.</div>
+                  </div>
+                </button>
+              </div>
+            </div>
             <div className="md:col-span-2 space-y-2"><Label>Test name</Label><Input value={meta.name} onChange={e=>setMeta({...meta, name:e.target.value})} placeholder="Algebra 1A Growth Test" data-testid="ti-name" /></div>
             <div className="md:col-span-2 space-y-2">
               <Label>Courses</Label>
@@ -241,16 +331,34 @@ export default function TestImport() {
           <CardContent className="p-6 space-y-6">
             <div className="grid md:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Quiz / test booklet (.docx auto-extracts embedded images)</Label>
+                <Label>
+                  {meta.format === "text"
+                    ? "Test booklet (.docx — passages + questions parsed automatically)"
+                    : "Quiz / test booklet (.docx auto-extracts embedded images)"}
+                </Label>
                 <Input type="file" accept=".docx,.pdf" onChange={onBookletFile} data-testid="ti-booklet" />
                 {bookletFile && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <Badge variant="outline">{bookletFile.name}</Badge>
-                    {Object.keys(imageMap).length > 0 && (
+                    {meta.format === "text" && textParsed && (
+                      <Badge className="bg-[hsl(var(--success))] text-white" data-testid="ti-text-parsed-badge">
+                        {textParsed.questions.length} Qs, {textParsed.passages.length} passages
+                      </Badge>
+                    )}
+                    {meta.format === "image" && Object.keys(imageMap).length > 0 && (
                       <Badge className="bg-[hsl(var(--success))] text-white">
                         {Object.keys(imageMap).length} images extracted
                       </Badge>
                     )}
+                  </div>
+                )}
+                {meta.format === "text" && textWarnings.length > 0 && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 space-y-1" data-testid="ti-text-warnings">
+                    {textWarnings.map((w, i) => (
+                      <div key={i} className="flex items-start gap-2 text-xs text-amber-900">
+                        <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" /> <span>{w}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -262,7 +370,7 @@ export default function TestImport() {
             </div>
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={()=>setStep(1)}>Back</Button>
-              <Button onClick={()=>setStep(3)} disabled={keyEntries.length === 0} data-testid="ti-next-2">Continue <ChevronRight className="h-4 w-4" /></Button>
+              <Button onClick={()=>setStep(3)} disabled={keyEntries.length === 0 || (meta.format === "text" && !textParsed)} data-testid="ti-next-2">Continue <ChevronRight className="h-4 w-4" /></Button>
             </div>
           </CardContent>
         </Card>
@@ -271,35 +379,113 @@ export default function TestImport() {
       {step === 3 && (
         <Card>
           <CardContent className="p-6 space-y-6">
-            <div className="space-y-2">
-              <Label>Question images <span className="text-muted-foreground font-normal">(optional — already extracted from .docx booklet)</span></Label>
-              <Input type="file" multiple accept="image/*,.zip" onChange={e => handleQuestionImages(e.target.files)} data-testid="ti-images" />
-              <p className="text-xs text-muted-foreground">Use this to add or replace individual images. Filenames like q01.png, q02.png map to question numbers; a ZIP with similarly named files works too.</p>
-            </div>
-            <div className="grid md:grid-cols-2 gap-4 text-sm">
-              <Card className="border-dashed"><CardContent className="p-4 flex items-center gap-3">
-                <CheckCircle2 className="h-5 w-5 text-[hsl(var(--success))]" />
-                <div><div className="font-medium">{keyEntries.length} answer-key entries detected</div><div className="text-xs text-muted-foreground">Review below.</div></div>
-              </CardContent></Card>
-              <Card className="border-dashed"><CardContent className="p-4 flex items-center gap-3">
-                {missing === 0 ? <CheckCircle2 className="h-5 w-5 text-[hsl(var(--success))]" /> : <AlertTriangle className="h-5 w-5 text-[hsl(var(--warning))]" />}
-                <div><div className="font-medium">{missing === 0 ? "All images mapped" : `${missing} images missing`}</div><div className="text-xs text-muted-foreground">Upload more or proceed (placeholder used).</div></div>
-              </CardContent></Card>
-            </div>
-            <Table>
-              <TableHeader><TableRow><TableHead>Q#</TableHead><TableHead>Image</TableHead><TableHead className="text-right">Answer</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {keyEntries.sort((a,b)=>a.qn-b.qn).map(e => (
-                  <TableRow key={e.qn} data-testid={`ti-row-${e.qn}`}>
-                    <TableCell className="font-mono">{e.qn}</TableCell>
-                    <TableCell>
-                      {imageMap[e.qn] ? <img src={imageMap[e.qn]} className="h-12 rounded border border-border" alt="" /> : <span className="text-xs text-muted-foreground">Will use placeholder</span>}
-                    </TableCell>
-                    <TableCell className="text-right font-mono">{e.ans}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            {meta.format === "image" && (
+              <>
+                <div className="space-y-2">
+                  <Label>Question images <span className="text-muted-foreground font-normal">(optional — already extracted from .docx booklet)</span></Label>
+                  <Input type="file" multiple accept="image/*,.zip" onChange={e => handleQuestionImages(e.target.files)} data-testid="ti-images" />
+                  <p className="text-xs text-muted-foreground">Use this to add or replace individual images. Filenames like q01.png, q02.png map to question numbers; a ZIP with similarly named files works too.</p>
+                </div>
+                <div className="grid md:grid-cols-2 gap-4 text-sm">
+                  <Card className="border-dashed"><CardContent className="p-4 flex items-center gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-[hsl(var(--success))]" />
+                    <div><div className="font-medium">{keyEntries.length} answer-key entries detected</div><div className="text-xs text-muted-foreground">Review below.</div></div>
+                  </CardContent></Card>
+                  <Card className="border-dashed"><CardContent className="p-4 flex items-center gap-3">
+                    {missing === 0 ? <CheckCircle2 className="h-5 w-5 text-[hsl(var(--success))]" /> : <AlertTriangle className="h-5 w-5 text-[hsl(var(--warning))]" />}
+                    <div><div className="font-medium">{missing === 0 ? "All images mapped" : `${missing} images missing`}</div><div className="text-xs text-muted-foreground">Upload more or proceed (placeholder used).</div></div>
+                  </CardContent></Card>
+                </div>
+                <Table>
+                  <TableHeader><TableRow><TableHead>Q#</TableHead><TableHead>Image</TableHead><TableHead className="text-right">Answer</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {keyEntries.sort((a,b)=>a.qn-b.qn).map(e => (
+                      <TableRow key={e.qn} data-testid={`ti-row-${e.qn}`}>
+                        <TableCell className="font-mono">{e.qn}</TableCell>
+                        <TableCell>
+                          {imageMap[e.qn] ? <img src={imageMap[e.qn]} className="h-12 rounded border border-border" alt="" /> : <span className="text-xs text-muted-foreground">Will use placeholder</span>}
+                        </TableCell>
+                        <TableCell className="text-right font-mono">{e.ans}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </>
+            )}
+
+            {meta.format === "text" && textParsed && (
+              <>
+                <div className="grid md:grid-cols-3 gap-4 text-sm">
+                  <Card className="border-dashed"><CardContent className="p-4 flex items-center gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-[hsl(var(--success))]" />
+                    <div><div className="font-medium">{textParsed.questions.length} questions parsed</div><div className="text-xs text-muted-foreground">from the booklet</div></div>
+                  </CardContent></Card>
+                  <Card className="border-dashed"><CardContent className="p-4 flex items-center gap-3">
+                    <CheckCircle2 className="h-5 w-5 text-[hsl(var(--success))]" />
+                    <div><div className="font-medium">{textParsed.passages.length} passages</div><div className="text-xs text-muted-foreground">{(() => {
+                      const shared = {};
+                      textParsed.questions.forEach(q => { if (q.passage_ordinal) shared[q.passage_ordinal] = (shared[q.passage_ordinal]||0) + 1; });
+                      const sharedCount = Object.values(shared).filter(c => c > 1).length;
+                      return sharedCount > 0 ? `${sharedCount} shared by 2+ questions` : "all single-question";
+                    })()}</div></div>
+                  </CardContent></Card>
+                  <Card className="border-dashed"><CardContent className="p-4 flex items-center gap-3">
+                    {keyEntries.length >= textParsed.questions.length ? <CheckCircle2 className="h-5 w-5 text-[hsl(var(--success))]" /> : <AlertTriangle className="h-5 w-5 text-[hsl(var(--warning))]" />}
+                    <div><div className="font-medium">{keyEntries.length} answers</div><div className="text-xs text-muted-foreground">{keyEntries.length >= textParsed.questions.length ? "fully keyed" : `missing ${textParsed.questions.length - keyEntries.length}`}</div></div>
+                  </CardContent></Card>
+                </div>
+
+                <div className="border border-border rounded-md max-h-[55vh] overflow-auto" data-testid="ti-text-preview">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12">Q#</TableHead>
+                        <TableHead>Passage</TableHead>
+                        <TableHead>Question stem &amp; choices</TableHead>
+                        <TableHead className="text-right w-16">Answer</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {textParsed.questions.map(q => {
+                        const p = q.passage_ordinal ? textParsed.passages.find(x => x.ordinal === q.passage_ordinal) : null;
+                        const ans = keyEntries.find(e => e.qn === q.qn)?.ans;
+                        return (
+                          <TableRow key={q.qn} data-testid={`ti-text-row-${q.qn}`}>
+                            <TableCell className="font-mono align-top">{q.qn}</TableCell>
+                            <TableCell className="align-top max-w-[200px]">
+                              {p ? (
+                                <div>
+                                  {p.title && <div className="text-xs font-semibold truncate">{p.title}</div>}
+                                  <div className="text-xs text-muted-foreground line-clamp-2">{p.body}</div>
+                                  <Badge variant="outline" className="mt-1 text-[10px]">passage #{p.ordinal}</Badge>
+                                </div>
+                              ) : <span className="text-xs text-muted-foreground">—</span>}
+                            </TableCell>
+                            <TableCell className="align-top max-w-md">
+                              <div className="text-xs font-medium line-clamp-2">{q.stem}</div>
+                              <div className="text-[11px] text-muted-foreground mt-1 grid grid-cols-1 gap-0.5">
+                                <div><span className="font-mono mr-1">A.</span>{q.choices.A}</div>
+                                <div><span className="font-mono mr-1">B.</span>{q.choices.B}</div>
+                                <div><span className="font-mono mr-1">C.</span>{q.choices.C}</div>
+                                <div><span className="font-mono mr-1">D.</span>{q.choices.D}</div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right font-mono align-top">
+                              {ans ? (
+                                <Badge className="bg-[hsl(var(--success))] text-white">{ans}</Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-amber-700 border-amber-400">missing</Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
+            )}
+
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={()=>setStep(2)}>Back</Button>
               <Button onClick={commit} data-testid="ti-commit">Commit test</Button>

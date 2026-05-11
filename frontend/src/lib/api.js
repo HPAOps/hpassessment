@@ -867,6 +867,21 @@ export async function upsertQuestion(q, actor) {
   return data;
 }
 
+// Bulk import a TEXT-BASED test (passages + questions + answers in one RPC).
+// Replaces any existing passages/questions on the test (idempotent re-import).
+// passages: [{ordinal:int, title?:string, body:string}]
+// questions: [{qn:int, question_text, choice_a/b/c/d, correct:'A'|'B'|'C'|'D', passage_ordinal?:int}]
+export async function importTextTest(testId, passages, questions) {
+  const { data, error } = await supabase.rpc("admin_import_text_test", {
+    p_test_id: testId,
+    p_passages: passages,
+    p_questions: questions,
+  });
+  if (error) throw error;
+  return data;
+}
+
+
 export async function deleteQuestion(questionId, actor) {
   if (isDemoMode) {
     const s = store();
