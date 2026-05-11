@@ -186,7 +186,7 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   code-prompt page that confirms student name + test before validating via
   `redeem_test_code`. Wrong code → friendly inline error, no page crash.
 
-## Phase H — P2 Waiting room + live proctor (2026-02)
+## Phase H — P2 Waiting room + live proctor (2026-02) ✅ VERIFIED
 
 - New `test_sessions` table (one active per `(test, section, phase)`) +
   per-attempt `session_id`, `is_paused`, `paused_at`, `paused_reason`,
@@ -213,6 +213,14 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
 - **Section roster** has a new "Proctor a test" panel that lists every
   test linked to the section's course with one BOC + one EOC button per
   test, launching the proctor view directly.
+- **`StudentTestCode.jsx`** — case-insensitive phase compare, `code-aggregated`
+  hidden input for reliable automation, visible "test not open" diagnostic.
+- **End-to-end verified (iteration_14)**: student joins waiting room →
+  proctor sees joined → start → student auto-redirect to test → pause
+  individual → end session → auto-submit chain all PASS.
+- **Migration ordering gotcha**: `ALTER TYPE attempt_status ADD VALUE
+  'waiting'` must run in its OWN transaction before any function references
+  it. Captured in `/app/supabase/p2_waiting_room_fix_enum.sql`.
 
 ## Implemented (v1) — completion date 2026-02
 

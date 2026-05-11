@@ -122,10 +122,17 @@ export default function Proctor() {
   async function onEnd() {
     if (busy) return;
     setBusy(true);
+    const inProgressBefore = (state.attempts || []).filter(
+      a => a.status === "in_progress" && !a.is_paused
+    ).length;
     try {
       await teacherEndSession(state.session.id);
       await refresh();
-      toast.success("Test ended. In-progress attempts auto-submitted.");
+      toast.success(
+        inProgressBefore > 0
+          ? `Test ended. ${inProgressBefore} in-progress attempt${inProgressBefore === 1 ? "" : "s"} auto-submitted.`
+          : "Test ended."
+      );
     } catch (e) {
       toast.error(e?.message || "Could not end the test");
     } finally { setBusy(false); }
