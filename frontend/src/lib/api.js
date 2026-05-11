@@ -1125,6 +1125,8 @@ export async function upsertWhitelist(entry) {
     p_campus_id: entry.campus_id || null,
     p_teacher_id: entry.teacher_id || null,
     p_tenant_hint: entry.tenant_hint || null,
+    p_first_name: entry.first_name || null,
+    p_last_name: entry.last_name || null,
   });
   if (error) throw error;
   return { ok: true };
@@ -1167,6 +1169,32 @@ export async function updateMyPassword(newPassword) {
   const { error } = await supabase.auth.updateUser({ password: newPassword });
   if (error) throw error;
   return { ok: true };
+}
+
+// Admin: set a staff user's password directly via the
+// `set-staff-password` Supabase Edge Function (uses service_role server-side).
+// Caller must be signed in as super_admin or district_admin.
+export async function setStaffPassword(email, password) {
+  if (isDemoMode) return { ok: true };
+  const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "";
+  if (!SUPABASE_URL) throw new Error("Supabase not configured");
+  const { data: sess } = await supabase.auth.getSession();
+  const jwt = sess?.session?.access_token;
+  if (!jwt) throw new Error("You must be signed in to set a password.");
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/set-staff-password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${jwt}`,
+      apikey: process.env.REACT_APP_SUPABASE_ANON_KEY || "",
+    },
+    body: JSON.stringify({ email, password }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(body?.error || `Failed (HTTP ${res.status})`);
+  }
+  return body;
 }
 
 

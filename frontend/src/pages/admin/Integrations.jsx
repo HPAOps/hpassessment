@@ -15,7 +15,7 @@ import { CheckCircle2, AlertCircle, Plug, ShieldCheck, Users, KeyRound, RotateCc
 import {
   listSecrets, setSecret, clearSecret, INTEGRATION_CATALOG,
   listWhitelist, upsertWhitelist, deleteWhitelist,
-  listCampuses, listTeachers, listStaff, sendPasswordResetEmail,
+  listCampuses, listTeachers, listStaff, sendPasswordResetEmail, setStaffPassword,
   listSyncRunsLatest, listSyncRunsRecent,
   invokeOneRosterApiSync,
 } from "@/lib/api";
@@ -399,7 +399,13 @@ function WhitelistManager({ isSuper }) {
   const filteredRows = search.trim()
     ? rows.filter(r => {
         const q = search.toLowerCase();
-        const name = nameByEmail.get(r.email.toLowerCase()) || teacherById.get(r.teacher_id) || "";
+        const wlName = (r.first_name || r.last_name)
+          ? `${r.first_name || ""} ${r.last_name || ""}`.trim()
+          : null;
+        const name = wlName
+          || nameByEmail.get(r.email.toLowerCase())
+          || teacherById.get(r.teacher_id)
+          || "";
         return (
           r.email.toLowerCase().includes(q) ||
           name.toLowerCase().includes(q) ||
@@ -460,7 +466,13 @@ function WhitelistManager({ isSuper }) {
             </TableHeader>
             <TableBody>
               {filteredRows.map(r => {
-                const name = nameByEmail.get(r.email.toLowerCase()) || teacherById.get(r.teacher_id) || "";
+                const wlName = (r.first_name || r.last_name)
+                  ? `${r.first_name || ""} ${r.last_name || ""}`.trim()
+                  : null;
+                const name = wlName
+                  || nameByEmail.get(r.email.toLowerCase())
+                  || teacherById.get(r.teacher_id)
+                  || "";
                 return (
                   <TableRow key={r.id} data-testid={`wl-row-${r.email}`}>
                     <TableCell className="text-sm" data-testid={`wl-name-${r.email}`}>
@@ -484,7 +496,15 @@ function WhitelistManager({ isSuper }) {
                           : <Mail className="h-3.5 w-3.5" />}
                         <span className="hidden xl:inline ml-1">Reset</span>
                       </Button>
-                      <WhitelistDialog mode="edit" entry={r} campuses={campuses} teachers={teachers} onDone={refresh} disabled={!isSuper}>
+                      <WhitelistDialog
+                        mode="edit"
+                        entry={r}
+                        resolvedName={name}
+                        campuses={campuses}
+                        teachers={teachers}
+                        onDone={refresh}
+                        disabled={!isSuper}
+                      >
                         <Button size="sm" variant="ghost" disabled={!isSuper}>Edit</Button>
                       </WhitelistDialog>
                       <Button size="sm" variant="ghost" disabled={!isSuper}
@@ -510,22 +530,42 @@ function WhitelistManager({ isSuper }) {
   );
 }
 
-function WhitelistDialog({ mode, entry, campuses, teachers, onDone, disabled, children }) {
+function WhitelistDialog({ mode, entry, resolvedName, campuses, teachers, onDone, disabled, children }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState(entry?.email || "");
   const [role, setRole] = useState(entry?.role || "teacher");
   const [campusId, setCampusId] = useState(entry?.campus_id || "none");
   const [teacherId, setTeacherId] = useState(entry?.teacher_id || "none");
   const [tenantHint, setTenantHint] = useState(entry?.tenant_hint || "");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [saving, setSaving] = useState(false);
+  // Password section state
+  const [pwOpen, setPwOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [pwSaving, setPwSaving] = useState(false);
 
   useEffect(() => {
     if (open && entry) {
       setEmail(entry.email); setRole(entry.role);
       setCampusId(entry.campus_id || "none"); setTeacherId(entry.teacher_id || "none");
       setTenantHint(entry.tenant_hint || "");
+      // Seed name from whitelist's own column first, else the resolved name from teachers/staff.
+      const seed = entry.first_name || entry.last_name
+        ? { f: entry.first_name || "", l: entry.last_name || "" }
+        : (() => {
+            const parts = (resolvedName || "").trim().split(/\s+/);
+            if (parts.length >= 2) return { f: parts.slice(0, -1).join(" "), l: parts[parts.length - 1] };
+            return { f: parts[0] || "", l: "" };
+          })();
+      setFirstName(seed.f); setLastName(seed.l);
+      setPwOpen(false); setNewPassword("");
+    } else if (open && mode === "add") {
+      setFirstName(""); setLastName(""); setEmail(""); setTenantHint("");
+      setRole("teacher"); setCampusId("none"); setTeacherId("none");
+      setPwOpen(false); setNewPassword("");
     }
-  }, [open, entry]);
+  }, [open, entry, mode, resolvedName]);
 
   async function save() {
     if (!email.trim()) { toast.error("Email required"); return; }
@@ -537,6 +577,8 @@ function WhitelistDialog({ mode, entry, campuses, teachers, onDone, disabled, ch
         campus_id: campusId === "none" ? null : campusId,
         teacher_id: teacherId === "none" ? null : teacherId,
         tenant_hint: tenantHint || null,
+        first_name: firstName.trim() || null,
+        last_name: lastName.trim() || null,
       });
       toast.success(mode === "add" ? "Staff added" : "Updated");
       setOpen(false);
@@ -545,19 +587,51 @@ function WhitelistDialog({ mode, entry, campuses, teachers, onDone, disabled, ch
     finally { setSaving(false); }
   }
 
+  async function savePassword() {
+    if (!newPassword || newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters.");
+      return;
+    }
+    setPwSaving(true);
+    try {
+      const res = await setStaffPassword(email.trim(), newPassword);
+      toast.success(
+        res?.action === "created"
+          ? `Account created for ${email} with the new password.`
+          : `Password updated for ${email}.`
+      );
+      setPwOpen(false);
+      setNewPassword("");
+    } catch (e) {
+      toast.error(e?.message || "Couldn't set password.");
+    } finally {
+      setPwSaving(false);
+    }
+  }
+
   if (disabled) return children;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent>
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="font-display">{mode === "add" ? "Add staff access" : "Edit staff access"}</DialogTitle>
           <DialogDescription>
-            Authorized emails can sign in via Microsoft SSO from either tenant. Changes log to the audit trail.
+            Authorized emails can sign in via Microsoft SSO or by email + password. Changes log to the audit trail.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>First name</Label>
+              <Input value={firstName} onChange={e => setFirstName(e.target.value)} placeholder="Jane" data-testid="wl-first-name" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Last name</Label>
+              <Input value={lastName} onChange={e => setLastName(e.target.value)} placeholder="Doe" data-testid="wl-last-name" />
+            </div>
+          </div>
           <div className="space-y-1.5">
             <Label>Email</Label>
             <Input value={email} onChange={e => setEmail(e.target.value)} placeholder="jdoe@madisonhighlandprep.org" disabled={mode === "edit"} data-testid="wl-email" />
@@ -603,6 +677,56 @@ function WhitelistDialog({ mode, entry, campuses, teachers, onDone, disabled, ch
             <Label>Tenant hint</Label>
             <Input value={tenantHint} onChange={e => setTenantHint(e.target.value)} placeholder="Highland Prep AZ / Madison HP" data-testid="wl-tenant" />
           </div>
+
+          {/* Set-password section: only on edit, only when an email is set. */}
+          {mode === "edit" && email && (
+            <div className="rounded-md border border-border p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium flex items-center gap-2">
+                  <KeyRound className="h-4 w-4" /> Sign-in password
+                </div>
+                {!pwOpen ? (
+                  <Button size="sm" variant="outline" onClick={() => setPwOpen(true)} data-testid="wl-show-set-password">
+                    Set password
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="ghost" onClick={() => { setPwOpen(false); setNewPassword(""); }} data-testid="wl-cancel-set-password">
+                    Cancel
+                  </Button>
+                )}
+              </div>
+              {pwOpen ? (
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Sets the user's email + password sign-in directly. If the account doesn't exist yet (they've never signed in via SSO), it will be created.
+                  </p>
+                  <div className="flex gap-2">
+                    <Input
+                      type="password"
+                      value={newPassword}
+                      onChange={e => setNewPassword(e.target.value)}
+                      placeholder="At least 8 characters"
+                      className="h-9"
+                      data-testid="wl-new-password"
+                      autoComplete="new-password"
+                    />
+                    <Button
+                      size="sm"
+                      onClick={savePassword}
+                      disabled={pwSaving || newPassword.length < 8}
+                      data-testid="wl-save-password"
+                    >
+                      {pwSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Or use the <span className="font-mono">Reset</span> button in the row to email a self-serve reset link instead.
+                </p>
+              )}
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
