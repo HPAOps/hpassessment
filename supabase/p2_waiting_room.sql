@@ -12,6 +12,11 @@
 -- =============================================================================
 
 -- 1) Schema -----------------------------------------------------------------
+-- Add 'waiting' to attempt_status enum if missing (idempotent, safe to re-run).
+-- Required because new attempts start in 'waiting' state before the teacher
+-- clicks Start.
+alter type attempt_status add value if not exists 'waiting';
+
 create table if not exists public.test_sessions (
   id uuid primary key default gen_random_uuid(),
   test_id uuid not null references public.tests(id) on delete cascade,
@@ -63,7 +68,7 @@ declare
   v_new_secret uuid;
   v_total int;
   v_test public.tests%rowtype;
-  v_initial_status text;
+  v_initial_status attempt_status;
 begin
   if length(v_normalized) = 0 then
     raise exception 'Please enter the test code from your teacher.' using errcode = '22023';
@@ -137,7 +142,9 @@ begin
   end if;
 
   -- New attempts inherit the session's current state.
-  v_initial_status := case when v_session.status = 'running' then 'in_progress' else 'waiting' end;
+  v_initial_status := case when v_session.status = 'running'
+                            then 'in_progress'::attempt_status
+                            else 'waiting'::attempt_status end;
 
   -- Existing attempt for this (student, test, phase)?
   select * into v_attempt from public.test_attempts
@@ -175,7 +182,7 @@ begin
 
     -- Ensure status matches session state (e.g. student rejoined after teacher started)
     if v_session.status = 'running' and v_attempt.status = 'waiting' then
-      update public.test_attempts set status = 'in_progress', started_at = coalesce(started_at, now())
+      update public.test_attempts set status = 'in_progress'::attempt_status, started_at = coalesce(started_at, now())
         where id = v_attempt.id returning * into v_attempt;
     end if;
 
@@ -200,7 +207,7 @@ begin
   ) values (
     p_student_db_id, p_test_id, p_section_id, v_phase, v_session.id,
     v_initial_status,
-    case when v_initial_status = 'in_progress' then now() else null end,
+    case when v_initial_status = 'in_progress'::attempt_status then now() else null end,
     v_question_ids, v_total, v_new_secret
   ) returning * into v_attempt;
 
