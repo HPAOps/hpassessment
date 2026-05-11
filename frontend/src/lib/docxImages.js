@@ -163,8 +163,10 @@ function blobToDataUrl(blob) {
 // (<w:br/>) inside a paragraph — these are produced by Shift+Enter in Word
 // and matter for test booklets where a question stem, an excerpt, and a
 // follow-up sentence are visually separated but live in one paragraph.
-// The regex requires either `<w:t>` exactly OR `<w:t ` followed by attrs, so
-// it doesn't accidentally match `<w:tab/>` (Word's tab self-closing tag).
+// Preserves UNDERLINED text by wrapping it in `[U]...[/U]` markers. Tests
+// often underline the specific phrase being asked about (e.g.
+// "an all inclusive trip") and losing that formatting makes the question
+// unanswerable. The marker pair is rendered by `FormattedText` in the UI.
 export async function extractDocxText(file) {
   const zip = await JSZip.loadAsync(file);
   const docFile = zip.file("word/document.xml");
@@ -174,15 +176,37 @@ export async function extractDocxText(file) {
   const out = [];
   const paragraphs = xml.split(/<\/w:p>/i);
   for (const p of paragraphs) {
-    // Walk the paragraph in document order, capturing <w:t> text runs and
-    // converting <w:br/> into a sentinel newline. The sentinel is split
-    // into separate "lines" before we push them into the output list.
+    // Walk runs (<w:r>) and stray <w:br/> tokens in document order.
     const tokens = [];
-    const re = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:br\s*\/?>/gi;
+    const re = /<w:r(?:\s[^>]*)?>([\s\S]*?)<\/w:r>|<w:br\s*\/?>/gi;
     let m;
     while ((m = re.exec(p)) !== null) {
       if (m[1] !== undefined) {
-        tokens.push(decodeXmlEntities(m[1]));
+        const runContent = m[1];
+        // Detect underline: <w:u w:val="single"/> (or anything not "none"/"0").
+        // A bare <w:u/> with no val also means underline-on per the OOXML spec.
+        const hasUnderline =
+          /<w:u\s+[^>]*w:val=["'](?!none|0)[^"']+["']/i.test(runContent) ||
+          /<w:u\s*\/>/i.test(runContent);
+        // Extract text + soft breaks from inside this run.
+        const inner = [];
+        const innerRe = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:br\s*\/?>/gi;
+        let im;
+        while ((im = innerRe.exec(runContent)) !== null) {
+          if (im[1] !== undefined) inner.push(decodeXmlEntities(im[1]));
+          else inner.push("\n");
+        }
+        const text = inner.join("");
+        if (hasUnderline && text.trim()) {
+          // Wrap only the non-leading/trailing-whitespace bit so the marker
+          // doesn't visually shift the layout when rendered.
+          const lead = text.match(/^\s*/)[0];
+          const tail = text.match(/\s*$/)[0];
+          const core = text.slice(lead.length, text.length - tail.length);
+          tokens.push(`${lead}[U]${core}[/U]${tail}`);
+        } else {
+          tokens.push(text);
+        }
       } else {
         tokens.push("\n");
       }

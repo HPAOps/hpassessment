@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { listQuestionsForTest, listPassagesForTest, listTests } from "@/lib/api";
 import { ArrowLeft, ArrowRight, FileText, Image as ImageIcon } from "lucide-react";
+import FormattedText from "@/components/common/FormattedText";
 
 export default function TestPreview() {
   const { testId } = useParams();
@@ -53,24 +54,24 @@ export default function TestPreview() {
               <Badge variant="outline" className="font-mono" data-testid="preview-correct">Correct: {q.correct_answer}</Badge>
             </div>
 
-            {/* TEXT MODE: passage card (if any) → stem → labeled A/B/C/D */}
+            {/* TEXT MODE: stem → passage → choices (matches booklet layout) */}
             {isText && (
               <div className="mt-4 space-y-4">
+                <div className="rounded-xl border border-border bg-card px-5 py-4" data-testid="preview-stem">
+                  <FormattedText text={q.question_text} as="div" className="text-sm leading-relaxed whitespace-pre-wrap" />
+                </div>
                 {passage && (
                   <div className="rounded-xl border border-border bg-card overflow-hidden" data-testid="preview-passage">
                     {passage.title && (
                       <div className="px-5 py-2.5 bg-secondary/30 border-b border-border">
-                        <div className="font-display font-bold text-sm whitespace-pre-wrap">{passage.title}</div>
+                        <FormattedText text={passage.title} as="div" className="font-display font-bold text-sm whitespace-pre-wrap" />
                       </div>
                     )}
                     <div className="px-5 py-4 max-h-[40vh] overflow-auto">
-                      <div className="whitespace-pre-wrap leading-relaxed text-sm">{passage.body}</div>
+                      <FormattedText text={passage.body} as="div" className="whitespace-pre-wrap leading-relaxed text-sm" />
                     </div>
                   </div>
                 )}
-                <div className="rounded-xl border border-border bg-card px-5 py-4" data-testid="preview-stem">
-                  <div className="text-sm leading-relaxed whitespace-pre-wrap">{q.question_text}</div>
-                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {["A","B","C","D"].map(L => {
                     const choiceText = q[`choice_${L.toLowerCase()}`];
@@ -82,7 +83,9 @@ export default function TestPreview() {
                         className={`rounded-lg border-2 p-3 flex items-start gap-3 ${isCorrect ? "border-[hsl(var(--success))] bg-[hsl(var(--success))]/5" : "border-border bg-card"}`}
                       >
                         <div className={`h-8 w-8 rounded-md flex items-center justify-center font-display font-bold text-sm shrink-0 ${isCorrect ? "bg-[hsl(var(--success))] text-white" : "bg-secondary text-foreground"}`}>{L}</div>
-                        <div className="flex-1 text-sm leading-relaxed">{choiceText || <span className="text-muted-foreground italic">— missing —</span>}</div>
+                        <div className="flex-1 text-sm leading-relaxed">
+                          {choiceText ? <FormattedText text={choiceText} /> : <span className="text-muted-foreground italic">— missing —</span>}
+                        </div>
                       </div>
                     );
                   })}

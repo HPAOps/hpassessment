@@ -7,6 +7,7 @@ import { Loader2, ArrowLeft, ArrowRight, CheckCircle2, ZoomIn, ZoomOut, Save, Se
 import { useAuth } from "@/contexts/AuthContext";
 import { getStudentAttempt, saveResponse, submitAttempt } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import FormattedText from "@/components/common/FormattedText";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
 
@@ -163,9 +164,20 @@ export default function StudentTest() {
             )}
           </div>
 
-          {/* TEXT MODE: passage (if any) → stem → choices */}
+          {/* TEXT MODE: stem → passage → choices (matches paper booklet layout) */}
           {currentQ && test.format === "text" && (
             <div className="space-y-6">
+              <div
+                className="rounded-xl border border-border bg-card px-6 py-5"
+                data-testid="question-stem"
+              >
+                <FormattedText
+                  text={currentQ.question_text}
+                  as="div"
+                  className="text-base leading-relaxed whitespace-pre-wrap"
+                />
+              </div>
+
               {(() => {
                 const p = currentQ.passage_id
                   ? passages.find(x => x.id === currentQ.passage_id)
@@ -177,26 +189,23 @@ export default function StudentTest() {
                   >
                     {p.title && (
                       <div className="px-6 py-3 bg-secondary/30 border-b border-border">
-                        <div className="font-display font-bold text-base whitespace-pre-wrap">{p.title}</div>
+                        <FormattedText
+                          text={p.title}
+                          as="div"
+                          className="font-display font-bold text-base whitespace-pre-wrap"
+                        />
                       </div>
                     )}
                     <div className="px-6 py-5 max-h-[45vh] overflow-auto">
-                      <div className="prose prose-sm max-w-none whitespace-pre-wrap leading-relaxed text-[15px]">
-                        {p.body}
-                      </div>
+                      <FormattedText
+                        text={p.body}
+                        as="div"
+                        className="prose prose-sm max-w-none whitespace-pre-wrap leading-relaxed text-[15px]"
+                      />
                     </div>
                   </div>
                 ) : null;
               })()}
-
-              <div
-                className="rounded-xl border border-border bg-card px-6 py-5"
-                data-testid="question-stem"
-              >
-                <div className="text-base leading-relaxed whitespace-pre-wrap">
-                  {currentQ.question_text}
-                </div>
-              </div>
             </div>
           )}
 
@@ -240,7 +249,7 @@ export default function StudentTest() {
                   )}>{letter}</div>
                   <div className="flex-1 text-base">
                     {choiceText ? (
-                      <span className="leading-relaxed">{choiceText}</span>
+                      <FormattedText text={choiceText} className="leading-relaxed" />
                     ) : (
                       <span>Answer choice {letter}</span>
                     )}
