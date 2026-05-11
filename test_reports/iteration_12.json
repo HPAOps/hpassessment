@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration-12 frontend fixes (case-insensitive phase compare, code-no-test diagnostic, code-aggregated hidden input) are VERIFIED WORKING. Single page.fill on [data-testid=code-aggregated] correctly populated all 6 code boxes (box0='Y', box5='6'), code-submit was enabled, and the click fired the redeem_test_code RPC. However the request_to-waiting-room flow is still BLOCKED -- the RPC itself returns HTTP 400 with the SQL error 'column \"status\" is of type attempt_status but expression is of type text'. The Continue button is no longer silent; the error is now surfaced in the [data-testid=code-error] panel, which is the diagnostic improvement iteration-12 was meant to deliver. Steps 5-9 (waiting-room confirm, proctor-start, pause, end) cannot be exercised until the SQL bug below is fixed on Supabase.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "RPC public.redeem_test_code (called from /student/test-code submit)",
+        "issue": "INSERT into public.test_attempts(..., status, ...) VALUES(..., v_initial_status, ...) fails because (a) attempt_status enum (schema.sql line 22, full_setup.sql line 45) is defined as ('in_progress','submitted','reset') -- it does NOT include 'waiting', and (b) v_initial_status is declared `text` and Postgres won't implicitly cast text->enum. p2_waiting_room.sql line 140 sets v_initial_status := 'waiting' when the session is not yet running, then line 202 inserts it directly. Result: HTTP 400 'column \"status\" is of type attempt_status but expression is of type text'. Fix requires a SQL migration: (1) ALTER TYPE attempt_status ADD VALUE IF NOT EXISTS 'waiting'; (2) inside redeem_test_code change `v_initial_status,` to `v_initial_status::attempt_status,` (line ~202). Apply on the live Supabase project at https://soaagmzmecutvlxfbscl.supabase.co. This blocks the entire P2 waiting-room feature end-to-end -- no student can join a session.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [
+    "Run on Supabase SQL editor: `ALTER TYPE attempt_status ADD VALUE IF NOT EXISTS 'waiting';` then edit /app/supabase/p2_waiting_room.sql line ~202 to cast `v_initial_status::attempt_status` (also defensively cast on line 178 `update ... set status = 'in_progress'::attempt_status` for consistency though the literal already auto-casts). Redeploy the function. Then re-run iteration_12 playwright flow -- the same daily code (rotates daily) will redirect to /student/waiting/<attemptId> and steps 5-9 can be verified.",
+    "After the SQL fix lands, retest the full chain: student-redeem -> /student/waiting -> proctor count-joined=1 -> proctor-start -> student auto-redirect to /student/test -> pause-{studentId} with dialog accept('Talking with neighbor') -> count-paused=1 -> proctor-end -> 'Test ended. In-progress attempts auto-submitted.' toast -> session-status='Ended'."
+  ],
+  "critical_code_review_comments": [
+    "p2_waiting_room.sql declares v_initial_status as `text` and inserts it into an enum column without ALTER TYPE first adding 'waiting' to attempt_status. Migration ordering issue -- the function was deployed but the prerequisite enum-value migration was not. Either add ALTER TYPE at the top of p2_waiting_room.sql or move that statement into schema.sql so a fresh setup is correct too.",
+    "Even after enum is patched, the explicit `::attempt_status` cast on the INSERT value is good hygiene -- it documents intent and survives future enum reorderings.",
+    "Frontend error rendering inside [data-testid=code-error] correctly surfaces the SQL message verbatim. Consider mapping known SQL/RPC errors to a friendlier copy in StudentTestCode.jsx onSubmit catch block (e.g. detect 'attempt_status' and show 'Something went wrong starting your test. Tell your teacher to check the server logs.') so students don't see raw Postgres messages in prod.",
+    "StudentTestCode.jsx case-insensitive phase match (line ~109) and hidden code-aggregated input (line ~66-78) both work as designed under Playwright -- recommend keeping these for future automation."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only request, but RPC bug found)", "frontend": "iteration-12 fixes themselves: 100% verified. End-to-end student-join flow: BLOCKED at redeem_test_code RPC. Steps 1-4 of request PASS (proctor view, code grab=YQJ9C6, student login, course tile, teacher-verify, test-picker, test-code page, aggregated fill, submit click, error surfaced). Steps 5-9 BLOCKED."},
+  "test_credentials": "super@hpa.test / HPATestUser123 (proctor, verified). Student 300432 Nathaniel Abrica (verified login + reaches /student/test-code/aaade6be-8ab0-4fa3-be28-1d9c02064fe5/c3bdbef0-66e9-4e38-9b7b-0819910caab4/EOC).",
+  "seed_data_creation": "None.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "Daily code at time of run = YQJ9C6 (rotates daily -- always re-grab). Section 8bdcad7b-1fea-4d7f-904d-7fbd5cf26705. Test c3bdbef0-66e9-4e38-9b7b-0819910caab4 (Pre-AP Biology 1, EOC window 2026-05-11 -> 2026-05-12). Student 300432 Nathaniel Abrica is enrolled and reaches /student/test-code successfully. The new code-aggregated hidden input is the right Playwright path: `await page.fill('[data-testid=code-aggregated]', code)` then `await page.click('[data-testid=code-submit]')`. The SQL bug in redeem_test_code (attempt_status enum missing 'waiting' + text->enum implicit-cast failure) blocks /student/waiting redirect with HTTP 400. Once the SQL is patched on Supabase, the rest of the flow (waiting -> start -> Q1 -> pause -> end + auto-submit) is unblocked and should be testable on the same credentials.",
+  "rca_of_the_issue": "RCA -- redeem_test_code RPC returns 400: After Playwright fills the aggregated input with 'YQJ9C6' and submits, the network XHR to PostgREST POST /rpc/redeem_test_code returns 400 with body containing `column \"status\" is of type attempt_status but expression is of type text`. Root cause is in /app/supabase/p2_waiting_room.sql: lines 66 (`v_initial_status text;`), 140 (`v_initial_status := case when v_session.status = 'running' then 'in_progress' else 'waiting' end;`), and 202 (inserts v_initial_status into test_attempts.status which is of type attempt_status). The attempt_status enum is declared in schema.sql line 22 / full_setup.sql line 45 as `('in_progress','submitted','reset')` -- it does NOT include 'waiting'. So when v_session.status = 'waiting' (the freshly-inserted session), v_initial_status = 'waiting' and the insert tries to coerce a text value 'waiting' into an enum that has no such member. Postgres rejects it. Reproduction: super@hpa.test proctor at /admin/sections/8bdcad7b.../proctor/c3bdbef0.../EOC, code=YQJ9C6. Student 300432 -> Pre-AP Biology 1 -> teacher-verify-yes -> test-pick -> /student/test-code/... -> fill [data-testid=code-aggregated] with YQJ9C6 -> click [data-testid=code-submit] -> code-error panel shows raw SQL message. Mitigation: SQL migration -- `ALTER TYPE attempt_status ADD VALUE IF NOT EXISTS 'waiting';` then in p2_waiting_room.sql line 202 change the values tuple so v_initial_status is cast: `..., v_initial_status::attempt_status, ...`. Redeploy the function on the live Supabase project. The frontend iteration-12 fixes are correct and need no further changes."
+}

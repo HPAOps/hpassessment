@@ -61,6 +61,21 @@ function CodeBoxes({ value, onChange, disabled }) {
           className="w-12 h-16 sm:w-14 sm:h-20 text-center font-mono text-3xl sm:text-4xl font-bold rounded-md border-2 border-border bg-card focus:border-[hsl(var(--accent))] focus:outline-none uppercase disabled:opacity-60"
         />
       ))}
+      {/* Automation hook: a single hidden input so Playwright / tests can
+          set the whole 6-char code in one call without per-box races. */}
+      <input
+        type="text"
+        aria-hidden="true"
+        tabIndex={-1}
+        value={value || ""}
+        onChange={e => {
+          const clean = (e.target.value || "").toUpperCase().replace(/[^A-Z2-9]/g, "");
+          onChange(clean.slice(0, 6));
+        }}
+        disabled={disabled}
+        data-testid="code-aggregated"
+        style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }}
+      />
     </div>
   );
 }
@@ -71,6 +86,7 @@ export default function StudentTestCode() {
   const nav = useNavigate();
   const [item, setItem] = useState(null);
   const [test, setTest] = useState(null);
+  const [openCount, setOpenCount] = useState(null); // null=loading, 0+=loaded
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -85,8 +101,19 @@ export default function StudentTestCode() {
       if (!it) { nav("/student/courses", { replace: true }); return; }
       setItem(it);
       const open = await getOpenTestsForCourse(it.course.id);
-      const t = (open || []).find(x => x.id === testId && (x.phase || x.test_type) === phase);
       if (!alive) return;
+      setOpenCount((open || []).length);
+      const want = (phase || "").toUpperCase();
+      const t = (open || []).find(x =>
+        x.id === testId
+        && String(x.phase || x.test_type || "").toUpperCase() === want
+      );
+      if (!t) {
+        // Visible diagnostic in console so QA / automation can see why
+        // the Continue button is disabled.
+        console.warn("[StudentTestCode] No matching open test:",
+          { testId, phase: want, openTests: open });
+      }
       setTest(t || null);
     })();
     return () => { alive = false; };
@@ -162,7 +189,13 @@ export default function StudentTestCode() {
             )}
 
             <form onSubmit={onSubmit} className="space-y-4">
-              <CodeBoxes value={code} onChange={setCode} disabled={submitting} />
+              <CodeBoxes value={code} onChange={setCode} disabled={submitting || !test} />
+              {!test && openCount !== null && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-testid="code-no-test">
+                  <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                  <span>This test isn't open right now. Ask your teacher to confirm you're on the right link, or go back to your courses.</span>
+                </div>
+              )}
               {error && (
                 <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800" data-testid="code-error">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
