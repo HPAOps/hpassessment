@@ -11,6 +11,7 @@ import {
   CircleDot, CheckCircle2, AlertTriangle, Copy,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   getSectionDetail, listTests, listTestCourses,
   getOrCreateDailyCode,
@@ -35,6 +36,10 @@ function pct(n, d) {
 
 export default function Proctor() {
   const { sectionId, testId, phase } = useParams();
+  const { staff } = useAuth();
+  // Teachers see progress only -- no scores. Admins see everything. The
+  // server enforces this in teacher_session_state too (defense in depth).
+  const showScores = staff?.role && staff.role !== "teacher";
   const nav = useNavigate();
   const [section, setSection] = useState(null);
   const [test, setTest] = useState(null);
@@ -278,7 +283,7 @@ export default function Proctor() {
                 <TableHead>Student</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Progress</TableHead>
-                <TableHead>Score</TableHead>
+                {showScores && <TableHead>Score</TableHead>}
                 <TableHead className="text-right" />
               </TableRow>
             </TableHeader>
@@ -303,7 +308,9 @@ export default function Proctor() {
                         </div>
                       </div>
                     </TableCell>
-                    <TableCell className="font-mono text-sm" data-testid={`score-${a.student.id}`}>{score}</TableCell>
+                    {showScores && (
+                      <TableCell className="font-mono text-sm" data-testid={`score-${a.student.id}`}>{score}</TableCell>
+                    )}
                     <TableCell className="text-right">
                       {canPause && isRunning && (
                         <Button variant="ghost" size="sm" onClick={() => onPause(a)} data-testid={`pause-${a.student.id}`}>
@@ -321,7 +328,7 @@ export default function Proctor() {
                     <div className="text-xs text-muted-foreground font-mono">{s.student_id}</div>
                   </TableCell>
                   <TableCell><Badge variant="outline">Not joined</Badge></TableCell>
-                  <TableCell colSpan={3} className="text-xs text-muted-foreground">Hasn't entered the code yet.</TableCell>
+                  <TableCell colSpan={showScores ? 3 : 2} className="text-xs text-muted-foreground">Hasn't entered the code yet.</TableCell>
                 </TableRow>
               ))}
             </TableBody>
