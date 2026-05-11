@@ -16,7 +16,7 @@ import { toast } from "sonner";
 // signs the user in to that short-lived session. We then let them
 // set a new password via supabase.auth.updateUser({ password }).
 export default function StaffResetPassword() {
-  const [hasRecoverySession, setHasRecoverySession] = useState(null); // null=loading
+  const [hasRecoverySession, setHasRecoverySession] = useState(null); // null=loading, true=recovery session, false=invalid
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [saving, setSaving] = useState(false);
@@ -25,21 +25,26 @@ export default function StaffResetPassword() {
 
   useEffect(() => {
     let alive = true;
-    // Listen for PASSWORD_RECOVERY events from supabase-js as it parses
-    // the URL hash. We also probe the current session in case the event
-    // already fired before this listener was attached.
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+    let timer = null;
+    // The ONLY signal that this is a recovery session is the PASSWORD_RECOVERY
+    // event from supabase-js as it parses the URL hash. We do NOT trust a
+    // pre-existing session — that could be a normal logged-in admin who
+    // happened to navigate here, and we must not let them accidentally
+    // overwrite their own password.
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (!alive) return;
-      if (event === "PASSWORD_RECOVERY" || (session && session.user)) {
+      if (event === "PASSWORD_RECOVERY") {
         setHasRecoverySession(true);
+        if (timer) { clearTimeout(timer); timer = null; }
       }
     });
-    (async () => {
-      const { data } = await supabase.auth.getSession();
+    // If we never hear PASSWORD_RECOVERY within 1.5s, treat this as an
+    // invalid / expired link.
+    timer = setTimeout(() => {
       if (!alive) return;
-      setHasRecoverySession(!!data?.session?.user);
-    })();
-    return () => { alive = false; sub?.subscription?.unsubscribe?.(); };
+      setHasRecoverySession(prev => prev === null ? false : prev);
+    }, 1500);
+    return () => { alive = false; sub?.subscription?.unsubscribe?.(); if (timer) clearTimeout(timer); };
   }, []);
 
   async function onSubmit(e) {

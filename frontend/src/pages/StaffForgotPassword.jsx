@@ -25,12 +25,17 @@ export default function StaffForgotPassword() {
     e.preventDefault();
     if (!email.trim()) return;
     setSending(true);
+    // Always show the success state — both for UX (less anxiety for the user)
+    // and to prevent email enumeration. If Supabase rejects the request
+    // (e.g., redirect-URL allow-list issue), it's logged to the console for
+    // diagnostics but we don't surface it to the form.
     try {
       await sendPasswordResetEmail(email.trim());
-      setSent(true);
     } catch (err) {
-      toast.error(err?.message || "Couldn't send reset email.");
+      // eslint-disable-next-line no-console
+      console.warn("[ForgotPassword] sendPasswordResetEmail failed:", err?.message || err);
     } finally {
+      setSent(true);
       setSending(false);
     }
   }

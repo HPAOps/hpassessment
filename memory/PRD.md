@@ -222,7 +222,50 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   'waiting'` must run in its OWN transaction before any function references
   it. Captured in `/app/supabase/p2_waiting_room_fix_enum.sql`.
 
-## Phase I — PWA + Chromebook kiosk install (2026-02) ✅
+## Phase J — Text-based tests + staff name editing + password reset (2026-02) ✅
+
+### Text-based tests (English 3, etc.)
+- `tests.format` enum (`image` | `text`), default `image` (backward-compat)
+- New `test_passages` table with RLS, linked via `questions.passage_id`
+- `questions.question_text` / `choice_a/b/c/d` columns
+- `admin_import_text_test` bulk-insert RPC (replaces existing content idempotently)
+- `get_student_attempt` updated to return passages + text + choices
+- DOCX parser (`/src/lib/docxText.js`): state-machine that handles Word
+  paragraph-per-line layout, captures stems/choices/passages, detects
+  shared passages (Q15+Q16, Q17+Q18, Q19+Q20, Q22+Q23, Q25+Q26)
+- Import wizard: new **Format radio** (Image / Text), text-mode preview
+  table with shared-passage badges, idempotent re-import
+- Student test page: branches on `test.format` — image mode unchanged,
+  text mode renders passage card → question stem → 4 text answer choices
+- Verified end-to-end (iteration_15): English 3 imported 30Qs + 17 passages
+- Migration: `/app/supabase/text_tests_schema.sql`
+
+### Staff Access — Name column + Edit
+- `staff_whitelist.first_name` + `last_name` columns (override OneRoster names)
+- `whitelist_upsert` RPC accepts name params
+- Frontend resolves names from staff_whitelist → teachers → staff with
+  fallback chain
+- New **Name** column (first column) + search box (filters by name /
+  email / role / campus)
+- Edit dialog now has First name + Last name fields at the top
+- Migration: `/app/supabase/whitelist_name_columns.sql`
+
+### Password reset (non-SSO)
+- **"Forgot your password?"** link on `/staff/login`
+- `/staff/forgot-password` — emails a Supabase reset link, always shows
+  success state to prevent email enumeration
+- `/staff/reset-password` — strict gate: only renders "set new password"
+  form when `PASSWORD_RECOVERY` event fires (no longer leaks normal
+  sessions into the reset code path)
+- **Reset envelope button** on each staff row triggers
+  `sendPasswordResetEmail`
+- **Direct password set** UI in Edit dialog (gated behind not-yet-deployed
+  Edge Function `set-staff-password`; SQL changes alone are enough for
+  the email-reset path to work)
+- Required Supabase config (manual): Auth → URL Configuration →
+  add redirect URL `https://<host>/staff/reset-password`
+
+
 
 - **Web App Manifest** (`/public/manifest.json`) with HPA branding,
   `display: standalone`, `start_url: /`, `theme_color: #0F2040`,
