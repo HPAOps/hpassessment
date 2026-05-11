@@ -222,6 +222,33 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
   'waiting'` must run in its OWN transaction before any function references
   it. Captured in `/app/supabase/p2_waiting_room_fix_enum.sql`.
 
+## Phase I — PWA + Chromebook kiosk install (2026-02) ✅
+
+- **Web App Manifest** (`/public/manifest.json`) with HPA branding,
+  `display: standalone`, `start_url: /`, `theme_color: #0F2040`,
+  educational category, 5 icons (192, 512, 512-maskable, apple-touch 180,
+  multi-res favicon).
+- **Service worker** (`/public/service-worker.js`):
+  - Cache-first for app shell + CRA `/static/` hashed bundles + fonts
+  - Stale-while-revalidate for static assets (instant boot, background refresh)
+  - **NEVER caches Supabase, Microsoft Entra, or `/api/` traffic** —
+    student answers and roster data must always hit the network (FERPA)
+  - **Silent update strategy**: no `skipWaiting`. New version activates on
+    the next browser launch, so a kiosk mid-test reload is impossible.
+- **Registration** (`/src/lib/registerSW.js`) only fires in production
+  builds (`process.env.NODE_ENV === 'production'`) so HMR is unaffected.
+- **PNG icon generator** (`/tmp/gen_pwa_icons.py`, kept for re-render) —
+  renders HP monogram in brand navy gradient with gold accent diamond.
+- `<meta name="apple-mobile-web-app-capable">` + status-bar style so the
+  app feels native on iOS bookmarks too.
+
+### Deploying to Chromebook kiosks (Google Admin Console)
+1. Deploy the app to its production URL.
+2. Google Admin Console → Devices → Chromebooks → Apps & Extensions →
+   **Managed Guest Sessions** or **Kiosks** → Add **Web App**.
+3. Paste the production URL (e.g. `https://assess.hpa.org/`).
+4. The PWA installs silently on every assigned device.
+
 ## Implemented (v1) — completion date 2026-02
 
 
@@ -248,7 +275,6 @@ based dashboards (district/campus/teacher), FERPA-conscious, Chromebook-friendly
 
 ## Backlog (v2)
 
-- **P0**: PWA service worker + manifest for Chromebook kiosk install.
 - **P1**: Question booklet auto-splitter (PDF/Docx → q01.png … qNN.png).
 - **P2**: CSV / PDF report exports.
 - **P2**: Standards-tagged item analysis dashboard.
