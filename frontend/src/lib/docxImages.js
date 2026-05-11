@@ -158,7 +158,11 @@ function blobToDataUrl(blob) {
   });
 }
 
-  // Plain-text extraction from a .docx (used to parse answer keys saved as Word).
+// Plain-text extraction from a .docx (used to parse answer keys saved as Word).
+// Returns paragraphs separated by "\n". Also honors soft line breaks
+// (<w:br/>) inside a paragraph — these are produced by Shift+Enter in Word
+// and matter for test booklets where a question stem, an excerpt, and a
+// follow-up sentence are visually separated but live in one paragraph.
 // The regex requires either `<w:t>` exactly OR `<w:t ` followed by attrs, so
 // it doesn't accidentally match `<w:tab/>` (Word's tab self-closing tag).
 export async function extractDocxText(file) {
@@ -170,13 +174,23 @@ export async function extractDocxText(file) {
   const out = [];
   const paragraphs = xml.split(/<\/w:p>/i);
   for (const p of paragraphs) {
-    let line = "";
-    const reText = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/gi;
+    // Walk the paragraph in document order, capturing <w:t> text runs and
+    // converting <w:br/> into a sentinel newline. The sentinel is split
+    // into separate "lines" before we push them into the output list.
+    const tokens = [];
+    const re = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:br\s*\/?>/gi;
     let m;
-    while ((m = reText.exec(p)) !== null) {
-      line += decodeXmlEntities(m[1]);
+    while ((m = re.exec(p)) !== null) {
+      if (m[1] !== undefined) {
+        tokens.push(decodeXmlEntities(m[1]));
+      } else {
+        tokens.push("\n");
+      }
     }
-    if (line.trim()) out.push(line);
+    const fullText = tokens.join("");
+    for (const line of fullText.split(/\n/)) {
+      if (line.trim()) out.push(line);
+    }
   }
   return out.join("\n");
 }

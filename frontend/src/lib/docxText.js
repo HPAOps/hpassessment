@@ -94,9 +94,26 @@ export async function parseTextBookletDocx(file) {
     // sentence, Q7's 7-paragraph excerpt). This is how the booklet visually
     // separates the question from the text being analyzed.
     if (stemLines.length > 1) {
-      const firstLine = stemLines[0];
-      const remaining = stemLines.slice(1);
-      const body = remaining.join("\n\n").trim();
+      let firstLine = stemLines[0];
+      let bodyLines = stemLines.slice(1);
+
+      // Refinement: when the "first line" is just a directive ("Read this
+      // excerpt", "Read the paragraphs"), the LAST non-empty body line is
+      // usually the actual question (ends with "?"). Promote that to the
+      // stem so the student sees the real question prominently and the
+      // excerpt stays in the passage card.
+      const looksLikeDirective = /^Read\s+(this|the)\b/i.test(firstLine.trim())
+        && !firstLine.trim().endsWith("?");
+      if (looksLikeDirective && bodyLines.length >= 2) {
+        const lastIdx = bodyLines.length - 1;
+        const lastBodyLine = bodyLines[lastIdx];
+        if (/\?\s*$/.test(lastBodyLine.trim())) {
+          firstLine = lastBodyLine.trim();
+          bodyLines = bodyLines.slice(0, lastIdx);
+        }
+      }
+
+      const body = bodyLines.join("\n\n").trim();
       if (body) {
         passageCounter += 1;
         passages.push({
