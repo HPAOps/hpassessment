@@ -343,6 +343,15 @@ export async function listQuestionsForTest(testId) {
   return data || [];
 }
 
+// Passages for a text-based test (sorted by display_order).
+export async function listPassagesForTest(testId) {
+  if (isDemoMode) return [];
+  const { data, error } = await supabase.from("test_passages")
+    .select("*").eq("test_id", testId).order("display_order");
+  if (error) throw error;
+  return data || [];
+}
+
 export async function listAttempts(filter = {}) {
   if (isDemoMode) {
     let r = store().test_attempts;
