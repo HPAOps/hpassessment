@@ -1,21 +1,42 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AppShell, { PageHeader } from "@/components/Layout/AppShell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { listAttempts, listCampuses, listCourses, listGrowthResults, listStudents, listTeachers, listTests, listQuestionsForTest, resetAttempt } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
 import { toast } from "sonner";
+import { Search } from "lucide-react";
+
+// Sort helper: last name then first name, case-insensitive.
+function byLastFirst(a, b) {
+  const al = (a.last_name || "").toLowerCase();
+  const bl = (b.last_name || "").toLowerCase();
+  if (al !== bl) return al.localeCompare(bl);
+  return (a.first_name || "").toLowerCase().localeCompare((b.first_name || "").toLowerCase());
+}
+
+// Format "Last, First" with a graceful fallback if either part is missing.
+function lastFirst(p) {
+  if (!p) return "";
+  const last = p.last_name || "";
+  const first = p.first_name || "";
+  if (last && first) return `${last}, ${first}`;
+  return last || first || "";
+}
 
 export default function Reports() {
   const { staff } = useAuth();
   const [data, setData] = useState(null);
   const [activeTest, setActiveTest] = useState("");
   const [questions, setQuestions] = useState([]);
+  const [studentSearch, setStudentSearch] = useState("");
+  const [teacherSearch, setTeacherSearch] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -29,7 +50,6 @@ export default function Reports() {
 
   useEffect(() => { if (activeTest) listQuestionsForTest(activeTest).then(setQuestions); }, [activeTest]);
 
-  // Question analysis for selected test (must be declared before any early return).
   const qAnalysis = useMemo(() => {
     if (!data || !activeTest || questions.length === 0) return [];
     const testAttempts = data.attempts.filter(a => a.test_id === activeTest && a.status === "submitted");
@@ -45,16 +65,39 @@ export default function Reports() {
     });
   }, [activeTest, questions, data]);
 
-  if (!data) return <AppShell><div className="text-sm text-muted-foreground">Loading…</div></AppShell>;
+  // Per-student rows (sorted Last, First and search-filtered).
+  const studentRows = useMemo(() => {
+    if (!data) return [];
+    const rows = data.students.map(s => {
+      const sa = data.attempts.filter(a => a.student_id === s.id && a.status === "submitted");
+      const boc = sa.find(a => data.tests.find(t => t.id === a.test_id)?.test_type === "BOC");
+      const eoc = sa.find(a => data.tests.find(t => t.id === a.test_id)?.test_type === "EOC");
+      const g = data.growth.find(g => g.student_id === s.id);
+      return { s, boc, eoc, growth: g };
+    });
+    rows.sort((a, b) => byLastFirst(a.s, b.s));
+    if (!studentSearch.trim()) return rows;
+    const q = studentSearch.trim().toLowerCase();
+    return rows.filter(({ s }) =>
+      lastFirst(s).toLowerCase().includes(q) ||
+      `${s.first_name || ""} ${s.last_name || ""}`.toLowerCase().includes(q) ||
+      (s.student_id || "").toLowerCase().includes(q)
+    );
+  }, [data, studentSearch]);
 
-  // Per-student rows
-  const studentRows = data.students.map(s => {
-    const sa = data.attempts.filter(a => a.student_id === s.id && a.status === "submitted");
-    const boc = sa.find(a => data.tests.find(t => t.id === a.test_id)?.test_type === "BOC");
-    const eoc = sa.find(a => data.tests.find(t => t.id === a.test_id)?.test_type === "EOC");
-    const g = data.growth.find(g => g.student_id === s.id);
-    return { s, boc, eoc, growth: g };
-  });
+  const filteredTeachers = useMemo(() => {
+    if (!data) return [];
+    const sorted = [...data.teachers].sort(byLastFirst);
+    if (!teacherSearch.trim()) return sorted;
+    const q = teacherSearch.trim().toLowerCase();
+    return sorted.filter(t =>
+      lastFirst(t).toLowerCase().includes(q) ||
+      `${t.first_name || ""} ${t.last_name || ""}`.toLowerCase().includes(q) ||
+      (t.email || "").toLowerCase().includes(q)
+    );
+  }, [data, teacherSearch]);
+
+  if (!data) return <AppShell><div className="text-sm text-muted-foreground">Loading…</div></AppShell>;
 
   async function onReset(att) {
     if (!confirm(`Reset attempt for student? They'll be able to re-take.`)) return;
@@ -77,6 +120,24 @@ export default function Reports() {
         </TabsList>
 
         <TabsContent value="students" className="mt-4">
+          <Card className="mb-4">
+            <CardContent className="p-3 flex items-center gap-3 flex-wrap">
+              <div className="relative flex-1 min-w-[260px] max-w-md">
+                <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={studentSearch}
+                  onChange={e => setStudentSearch(e.target.value)}
+                  placeholder="Search by name or student ID…"
+                  className="pl-9 h-9"
+                  data-testid="report-student-search"
+                />
+              </div>
+              <div className="text-xs text-muted-foreground ml-auto">
+                {studentRows.length} student{studentRows.length === 1 ? "" : "s"}
+                {studentSearch ? ` matching "${studentSearch}"` : ""}
+              </div>
+            </CardContent>
+          </Card>
           <Card><CardContent className="p-0">
             <Table>
               <TableHeader><TableRow>
@@ -87,7 +148,7 @@ export default function Reports() {
               <TableBody>
                 {studentRows.map(({s, boc, eoc, growth}) => (
                   <TableRow key={s.id} data-testid={`report-row-${s.id}`}>
-                    <TableCell className="font-medium">{s.first_name} {s.last_name}</TableCell>
+                    <TableCell className="font-medium">{lastFirst(s)}</TableCell>
                     <TableCell className="font-mono text-xs">{s.student_id}</TableCell>
                     <TableCell className="text-xs">{data.campuses.find(c => c.id === s.campus_id)?.name}</TableCell>
                     <TableCell className="text-center">{boc?.score_percent != null ? `${boc.score_percent}%` : "—"}</TableCell>
@@ -99,6 +160,9 @@ export default function Reports() {
                     </TableCell>
                   </TableRow>
                 ))}
+                {studentRows.length === 0 && (
+                  <TableRow><TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-10">No students match your search.</TableCell></TableRow>
+                )}
               </TableBody>
             </Table>
           </CardContent></Card>
@@ -109,7 +173,7 @@ export default function Reports() {
             <Table>
               <TableHeader><TableRow><TableHead>Course</TableHead><TableHead className="text-center">Tested</TableHead><TableHead className="text-center">Avg BOC</TableHead><TableHead className="text-center">Avg EOC</TableHead><TableHead className="text-center">Avg growth %</TableHead></TableRow></TableHeader>
               <TableBody>
-                {data.courses.map(c => {
+                {[...data.courses].sort((a,b) => (a.title || "").localeCompare(b.title || "")).map(c => {
                   const cTests = data.tests.filter(t => t.course_id === c.id);
                   const cAttempts = data.attempts.filter(a => cTests.find(t => t.id === a.test_id) && a.status === "submitted");
                   const studentSet = new Set(cAttempts.map(a => a.student_id));
@@ -132,15 +196,33 @@ export default function Reports() {
         </TabsContent>
 
         <TabsContent value="teachers" className="mt-4">
+          <Card className="mb-4">
+            <CardContent className="p-3 flex items-center gap-3 flex-wrap">
+              <div className="relative flex-1 min-w-[260px] max-w-md">
+                <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={teacherSearch}
+                  onChange={e => setTeacherSearch(e.target.value)}
+                  placeholder="Search by teacher name or email…"
+                  className="pl-9 h-9"
+                  data-testid="report-teacher-search"
+                />
+              </div>
+              <div className="text-xs text-muted-foreground ml-auto">
+                {filteredTeachers.length} teacher{filteredTeachers.length === 1 ? "" : "s"}
+                {teacherSearch ? ` matching "${teacherSearch}"` : ""}
+              </div>
+            </CardContent>
+          </Card>
           <Card><CardContent className="p-0">
             <Table>
               <TableHeader><TableRow><TableHead>Teacher</TableHead><TableHead>Campus</TableHead><TableHead className="text-center">Sections</TableHead><TableHead className="text-center">Students</TableHead><TableHead className="text-center">Avg BOC</TableHead><TableHead className="text-center">Avg EOC</TableHead></TableRow></TableHeader>
               <TableBody>
-                {data.teachers.map(t => {
+                {filteredTeachers.map(t => {
                   const camp = data.campuses.find(c => c.id === t.campus_id);
                   return (
-                    <TableRow key={t.id}>
-                      <TableCell>{t.first_name} {t.last_name}</TableCell>
+                    <TableRow key={t.id} data-testid={`report-teacher-row-${t.id}`}>
+                      <TableCell className="font-medium">{lastFirst(t)}</TableCell>
                       <TableCell>{camp?.name}</TableCell>
                       <TableCell className="text-center">—</TableCell>
                       <TableCell className="text-center">—</TableCell>
@@ -149,6 +231,9 @@ export default function Reports() {
                     </TableRow>
                   );
                 })}
+                {filteredTeachers.length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-10">No teachers match your search.</TableCell></TableRow>
+                )}
               </TableBody>
             </Table>
           </CardContent></Card>
@@ -159,7 +244,7 @@ export default function Reports() {
             <span className="text-sm font-medium">Test:</span>
             <Select value={activeTest} onValueChange={setActiveTest}>
               <SelectTrigger className="max-w-md" data-testid="qa-test-select"><SelectValue /></SelectTrigger>
-              <SelectContent>{data.tests.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}</SelectContent>
+              <SelectContent>{[...data.tests].sort((a,b) => (a.name || "").localeCompare(b.name || "")).map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}</SelectContent>
             </Select>
           </CardContent></Card>
           <Card><CardContent className="p-6">
@@ -208,13 +293,14 @@ export default function Reports() {
 }
 
 function MissingList({ title, rows }) {
+  // `rows` is already sorted Last, First from the parent's studentRows memo.
   return (
     <div>
       <div className="overline mb-2">{title} ({rows.length})</div>
       <ul className="space-y-1 max-h-80 overflow-auto">
         {rows.map(s => (
           <li key={s.id} className="text-sm flex items-center justify-between border-b border-border pb-1">
-            <span>{s.first_name} {s.last_name}</span>
+            <span>{lastFirst(s)}</span>
             <span className="font-mono text-xs text-muted-foreground">{s.student_id}</span>
           </li>
         ))}
