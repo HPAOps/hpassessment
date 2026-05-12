@@ -46,18 +46,16 @@ export default function StaffLogin() {
 
   return (
     <div className="min-h-screen grid lg:grid-cols-2 bg-background">
-      <div className="hidden lg:flex flex-col justify-between p-12 brand-gradient grain text-[hsl(var(--primary-foreground))] relative overflow-hidden">
-        <Link to="/" className="relative z-10 inline-flex"><HpaLogo showText /></Link>
-        <div className="relative z-10">
-          <div className="overline opacity-80 !text-white/70">Staff portal</div>
-          <h2 className="mt-4 font-display text-5xl font-bold tracking-tight leading-[1.05]">
-            Track growth.<br/><span className="text-[hsl(var(--accent))]">Power instruction.</span>
-          </h2>
-          <p className="mt-6 max-w-md text-white/75">
-            Manage assessments, import OneRoster data, monitor student progress, and review BOC→EOC growth across every campus.
-          </p>
-        </div>
-        <div className="absolute -right-32 -bottom-32 w-[480px] h-[480px] rounded-full bg-[hsl(var(--accent))]/20 blur-3xl" />
+      {/* Left brand panel: black canvas with the HPA shield centered
+          (matches StudentLogin so staff/student sign-in pages feel like
+          one app). */}
+      <div className="hidden lg:flex items-center justify-center bg-black p-12 relative overflow-hidden" data-testid="staff-brand-panel">
+        <img
+          src="/hpa-logo.png"
+          alt="HPA Educational Services"
+          className="relative z-10 w-[min(78%,560px)] h-auto object-contain drop-shadow-2xl select-none"
+          draggable={false}
+        />
       </div>
 
       <div className="flex items-center justify-center p-6 lg:p-12">
