@@ -2,31 +2,48 @@ import React from "react";
 
 // Renders test-content text that may contain inline formatting markers.
 // Currently supported:
-//   [U]text[/U]  → <u>text</u> (underline)
+//   [B]text[/B]  → <strong>
+//   [I]text[/I]  → <em>
+//   [U]text[/U]  → <u>
 //
-// The markers are produced by `extractDocxText` when it encounters runs with
-// `<w:u/>` styling in the source .docx. They preserve the underline cues
-// that questions like "What is the correct way to hyphenate the underlined
-// phrase?" depend on.
+// The markers are produced by `extractDocxText` when it encounters runs
+// styled with `<w:b/>`, `<w:i/>`, or `<w:u/>` in the source .docx, so the
+// quiz preserves the exact bolds / italics / underlines from the booklet.
 //
-// The output is a React fragment (safe — no innerHTML, no dangerouslySetInnerHTML).
+// Output is React elements (never `innerHTML` / `dangerouslySetInnerHTML`),
+// so even though the source is admin-uploaded, an accidentally-malformed
+// marker can't escape into the DOM as raw HTML.
+function renderFormatted(text, keyBase = "f") {
+  if (!text) return null;
+  const re = /\[([BIU])\]/;
+  const m = text.match(re);
+  if (!m) return text;
+  const tag = m[1];
+  const start = m.index;
+  const closeStr = `[/${tag}]`;
+  const closeIdx = text.indexOf(closeStr, start + 3);
+  if (closeIdx === -1) return text; // malformed -- return as-is
+
+  const before = text.slice(0, start);
+  const inner = text.slice(start + 3, closeIdx);
+  const after = text.slice(closeIdx + closeStr.length);
+
+  const Element = tag === "B" ? "strong" : tag === "I" ? "em" : "u";
+  const cls = tag === "U" ? "underline decoration-2 underline-offset-4" : undefined;
+
+  return (
+    <React.Fragment>
+      {before}
+      <Element key={`${keyBase}-${start}`} className={cls}>
+        {renderFormatted(inner, `${keyBase}-i${start}`)}
+      </Element>
+      {renderFormatted(after, `${keyBase}-a${closeIdx}`)}
+    </React.Fragment>
+  );
+}
+
 export default function FormattedText({ text, as = "span", className }) {
   if (!text) return null;
   const Tag = as;
-  const parts = [];
-  const re = /\[U\]([\s\S]*?)\[\/U\]/g;
-  let key = 0;
-  let lastIndex = 0;
-  let m;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > lastIndex) {
-      parts.push(<React.Fragment key={key++}>{text.slice(lastIndex, m.index)}</React.Fragment>);
-    }
-    parts.push(<u key={key++} className="underline decoration-2 underline-offset-4">{m[1]}</u>);
-    lastIndex = m.index + m[0].length;
-  }
-  if (lastIndex < text.length) {
-    parts.push(<React.Fragment key={key++}>{text.slice(lastIndex)}</React.Fragment>);
-  }
-  return <Tag className={className}>{parts}</Tag>;
+  return <Tag className={className}>{renderFormatted(text)}</Tag>;
 }

@@ -163,10 +163,34 @@ function blobToDataUrl(blob) {
 // (<w:br/>) inside a paragraph — these are produced by Shift+Enter in Word
 // and matter for test booklets where a question stem, an excerpt, and a
 // follow-up sentence are visually separated but live in one paragraph.
-// Preserves UNDERLINED text by wrapping it in `[U]...[/U]` markers. Tests
-// often underline the specific phrase being asked about (e.g.
-// "an all inclusive trip") and losing that formatting makes the question
-// unanswerable. The marker pair is rendered by `FormattedText` in the UI.
+//
+// Preserves the three inline formats that test booklets commonly rely on:
+//   <w:b/>  → [B]…[/B]   (bold)
+//   <w:i/>  → [I]…[/I]   (italic)
+//   <w:u/>  → [U]…[/U]   (underline)
+//
+// Markers are nested in a stable order (B → I → U) when a single run has
+// multiple formats. The `FormattedText` component renders them safely as
+// real `<strong>` / `<em>` / `<u>` elements (no innerHTML).
+//
+// Why preserve formatting?  Test questions like "What is the correct way
+// to hyphenate the **underlined phrase**?" or "Which **bolded** word…?"
+// are unanswerable when the formatting is stripped.
+function rprHas(rpr, tag) {
+  // Match the run-property tag while respecting word boundary so that
+  // <w:b…> isn't confused with <w:bCs…>, and <w:u…> isn't confused with
+  // <w:rStyle…>.
+  const tagRe = new RegExp(`<w:${tag}\\b([^>]*)/?>`, "i");
+  const m = rpr.match(tagRe);
+  if (!m) return false;
+  const valMatch = (m[1] || "").match(/w:val=["']([^"']+)["']/i);
+  if (valMatch) {
+    const v = valMatch[1].toLowerCase();
+    if (v === "false" || v === "0" || v === "none") return false;
+  }
+  return true;
+}
+
 export async function extractDocxText(file) {
   const zip = await JSZip.loadAsync(file);
   const docFile = zip.file("word/document.xml");
@@ -183,12 +207,12 @@ export async function extractDocxText(file) {
     while ((m = re.exec(p)) !== null) {
       if (m[1] !== undefined) {
         const runContent = m[1];
-        // Detect underline: <w:u w:val="single"/> (or anything not "none"/"0").
-        // A bare <w:u/> with no val also means underline-on per the OOXML spec.
-        const hasUnderline =
-          /<w:u\s+[^>]*w:val=["'](?!none|0)[^"']+["']/i.test(runContent) ||
-          /<w:u\s*\/>/i.test(runContent);
-        // Extract text + soft breaks from inside this run.
+        const rprMatch = runContent.match(/<w:rPr>([\s\S]*?)<\/w:rPr>/i);
+        const rpr = rprMatch ? rprMatch[1] : "";
+        const isBold = rprHas(rpr, "b");
+        const isItalic = rprHas(rpr, "i");
+        const isUnderline = rprHas(rpr, "u");
+
         const inner = [];
         const innerRe = /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>|<w:br\s*\/?>/gi;
         let im;
@@ -197,13 +221,16 @@ export async function extractDocxText(file) {
           else inner.push("\n");
         }
         const text = inner.join("");
-        if (hasUnderline && text.trim()) {
-          // Wrap only the non-leading/trailing-whitespace bit so the marker
-          // doesn't visually shift the layout when rendered.
+        if (text.trim() && (isBold || isItalic || isUnderline)) {
+          // Place markers AROUND the visible text only, leaving any
+          // leading/trailing whitespace outside so layout doesn't shift.
           const lead = text.match(/^\s*/)[0];
           const tail = text.match(/\s*$/)[0];
-          const core = text.slice(lead.length, text.length - tail.length);
-          tokens.push(`${lead}[U]${core}[/U]${tail}`);
+          let core = text.slice(lead.length, text.length - tail.length);
+          if (isUnderline) core = `[U]${core}[/U]`;
+          if (isItalic) core = `[I]${core}[/I]`;
+          if (isBold) core = `[B]${core}[/B]`;
+          tokens.push(`${lead}${core}${tail}`);
         } else {
           tokens.push(text);
         }

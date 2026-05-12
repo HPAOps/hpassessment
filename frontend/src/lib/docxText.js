@@ -26,16 +26,55 @@
 
 import { extractDocxText } from "./docxImages";
 
+// Consume zero-or-more formatting markers (e.g. "[B]", "[/B]") and any
+// whitespace, starting at index i. Returns the new index. Used so the
+// question/choice start matchers can see past the booklet's bold styling
+// on the literal number / letter / period (Word often runs "1." as
+// "[B]1[/B][B].[/B]" because each character lives in its own styled run).
+function consumeMarkersAndWs(s, i) {
+  while (i < s.length) {
+    if (s[i] === "[") {
+      const m = s.slice(i).match(/^\[\/?[BIU]\]/);
+      if (m) { i += m[0].length; continue; }
+    }
+    if (/\s/.test(s[i])) { i++; continue; }
+    break;
+  }
+  return i;
+}
+
 function matchQuestionStart(line) {
-  const m = line.match(/^\s*(\d{1,3})\.\s*(.*)$/);
-  if (!m) return null;
-  return { qn: parseInt(m[1], 10), rest: m[2] };
+  let i = consumeMarkersAndWs(line, 0);
+  // Word often breaks two-digit numbers like "16." into per-character runs:
+  // "[B]1[/B][B]6[/B][B].[/B]". So we loop: eat digits, peek past markers
+  // for more digits, repeat until the next non-marker non-digit char.
+  let num = "";
+  // Eat the first digit run.
+  while (i < line.length && /\d/.test(line[i])) { num += line[i]; i++; }
+  if (num.length === 0) return null;
+  while (true) {
+    const j = consumeMarkersAndWs(line, i);
+    if (j > i && j < line.length && /\d/.test(line[j])) {
+      i = j;
+      while (i < line.length && /\d/.test(line[i])) { num += line[i]; i++; }
+    } else {
+      i = j;
+      break;
+    }
+  }
+  if (line[i] !== ".") return null;
+  i = consumeMarkersAndWs(line, i + 1);
+  return { qn: parseInt(num, 10), rest: line.slice(i) };
 }
 
 function matchChoiceMarker(line) {
-  const m = line.match(/^\s*([ABCD])[\.\)]\s*(.*)$/);
-  if (!m) return null;
-  return { letter: m[1], rest: m[2] };
+  let i = consumeMarkersAndWs(line, 0);
+  if (i >= line.length || !/[ABCD]/.test(line[i])) return null;
+  const letter = line[i];
+  i = consumeMarkersAndWs(line, i + 1);
+  if (line[i] !== "." && line[i] !== ")") return null;
+  i = consumeMarkersAndWs(line, i + 1);
+  return { letter, rest: line.slice(i) };
 }
 
 const ORDER = ["A", "B", "C", "D"];
@@ -97,17 +136,16 @@ export async function parseTextBookletDocx(file) {
       let firstLine = stemLines[0];
       let bodyLines = stemLines.slice(1);
 
-      // Refinement: when the "first line" is just a directive ("Read this
-      // excerpt", "Read the paragraphs"), the LAST non-empty body line is
-      // usually the actual question (ends with "?"). Promote that to the
-      // stem so the student sees the real question prominently and the
-      // excerpt stays in the passage card.
-      const looksLikeDirective = /^Read\s+(this|the)\b/i.test(firstLine.trim())
-        && !firstLine.trim().endsWith("?");
+      // Strip markers when checking for the directive pattern (the same
+      // text in the source might be wrapped as "[B]Read this excerpt[/B]").
+      const stripMarkers = (s) => s.replace(/\[\/?[BIU]\]/g, "");
+
+      const looksLikeDirective = /^Read\s+(this|the)\b/i.test(stripMarkers(firstLine).trim())
+        && !stripMarkers(firstLine).trim().endsWith("?");
       if (looksLikeDirective && bodyLines.length >= 2) {
         const lastIdx = bodyLines.length - 1;
         const lastBodyLine = bodyLines[lastIdx];
-        if (/\?\s*$/.test(lastBodyLine.trim())) {
+        if (/\?\s*$/.test(stripMarkers(lastBodyLine).trim())) {
           firstLine = lastBodyLine.trim();
           bodyLines = bodyLines.slice(0, lastIdx);
         }
@@ -211,10 +249,10 @@ export async function parseTextBookletDocx(file) {
     // Between questions (or after this question's D) → passage builder.
     // Only treat the first line as a "title" if it matches a directive like
     // "Read the paragraphs." or "Read this excerpt from..." — those are
-    // pedagogical headers, not passage content. Everything else flows into
-    // the body so multi-paragraph passages (Q9's 3-paragraph Chuckwagons
-    // article, etc.) stay together as one continuous block.
-    const isDirective = /^Read\s+(this|the)\b/i.test(line);
+    // pedagogical headers, not passage content. Strip markers when checking
+    // so a bolded "[B]Read this[/B]" still qualifies.
+    const stripped = line.replace(/\[\/?[BIU]\]/g, "");
+    const isDirective = /^Read\s+(this|the)\b/i.test(stripped);
     if (!pendingTitle && pendingBody.length === 0 && isDirective) {
       pendingTitle = line;
     } else {
