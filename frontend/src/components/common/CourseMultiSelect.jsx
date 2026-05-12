@@ -54,7 +54,7 @@ export function CourseMultiSelect({ courses, value, onChange, testid = "course-m
 
   return (
     <div className="space-y-2">
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={setOpen} modal={false}>
         <PopoverTrigger asChild>
           <Button
             type="button"
@@ -72,10 +72,18 @@ export function CourseMultiSelect({ courses, value, onChange, testid = "course-m
             <ChevronDown className="h-4 w-4 opacity-50" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <PopoverContent
+          className="w-[var(--radix-popover-trigger-width)] p-0"
+          align="start"
+          /* When this popover lives inside a Radix Dialog, the Dialog's focus
+             trap and overlay can swallow `wheel` events before they reach the
+             scrollable CommandList. Re-emit the wheel here so the inner list
+             scrolls reliably. */
+          onWheel={(e) => e.stopPropagation()}
+        >
           <Command>
             <CommandInput placeholder="Search courses…" />
-            <CommandList>
+            <CommandList onWheel={(e) => e.stopPropagation()}>
               <CommandEmpty>No courses found.</CommandEmpty>
               <CommandGroup>
                 {groups.map(g => {
