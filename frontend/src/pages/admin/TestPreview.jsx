@@ -102,23 +102,17 @@ export default function TestPreview() {
           <div className="space-y-8">
             {grouped.map((group, gIdx) => (
               <div key={gIdx} className="space-y-3" data-testid={`preview-group-${gIdx}`}>
-                {/* Passage header bar */}
+                {/* Group header — list which questions this passage feeds */}
                 {group.passage ? (
-                  <div className="flex items-center gap-3 mb-3">
-                    <Badge className="bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))] gap-1.5">
-                      <FileText className="h-3.5 w-3.5" />
-                      Passage {gIdx + 1}
-                    </Badge>
-                    <div className="text-sm text-muted-foreground">
-                      Question{group.questions.length === 1 ? "" : "s"} {group.questions.map(q => `#${q.question_number}`).join(" + ")}
-                    </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider font-medium">
+                    <FileText className="h-3.5 w-3.5" />
+                    Passage for question{group.questions.length === 1 ? "" : "s"}{" "}
+                    {group.questions.map(q => `#${q.question_number}`).join(" + ")}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-3 mb-3">
-                    <Badge variant="outline">Standalone questions (no passage)</Badge>
-                    <div className="text-sm text-muted-foreground">
-                      {group.questions.map(q => `Q${q.question_number}`).join(", ")}
-                    </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider font-medium">
+                    Standalone question{group.questions.length === 1 ? "" : "s"} (no passage):{" "}
+                    {group.questions.map(q => `#${q.question_number}`).join(", ")}
                   </div>
                 )}
 
