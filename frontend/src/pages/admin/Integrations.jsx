@@ -667,7 +667,18 @@ function WhitelistDialog({ mode, entry, resolvedName, campuses, teachers, onDone
                 <SelectTrigger data-testid="wl-teacher"><SelectValue placeholder="—" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">— None —</SelectItem>
-                  {teachers.map(t => <SelectItem key={t.id} value={t.id}>{t.first_name} {t.last_name} · {t.email}</SelectItem>)}
+                  {[...teachers]
+                    .sort((a, b) => {
+                      const al = (a.last_name || "").toLowerCase();
+                      const bl = (b.last_name || "").toLowerCase();
+                      if (al !== bl) return al.localeCompare(bl);
+                      return (a.first_name || "").toLowerCase().localeCompare((b.first_name || "").toLowerCase());
+                    })
+                    .map(t => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {(t.last_name || "—")}, {(t.first_name || "—")} · {t.email}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">Link the SSO email to the OneRoster teacher record so RLS scopes their data.</p>
